@@ -12,14 +12,14 @@ Command-line MVP for publishing the active Roon HQPlayer zone to Discord Rich Pr
 git clone https://github.com/darthspaders/RoonPresence.git
 cd RoonPresence
 npm install
-copy .env.example .env
+Copy-Item .env.example .env
 notepad .env
 npm start
 ```
 
 4. In Roon, go to **Settings > Extensions** and enable **RoonPresence**.
 
-Set `DISCORD_CLIENT_ID` in `.env` before starting the app.
+This creates your personal `.env` config file. Set `DISCORD_CLIENT_ID` in `.env` before starting the app.
 
 ## Known Good `.env`
 
@@ -103,6 +103,7 @@ If memory grows unexpectedly, keep `MEMORY_LOG_MS=300000` and compare the period
 ```powershell
 npm test
 ```
+
 
 
 
