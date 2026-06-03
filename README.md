@@ -32,7 +32,7 @@ ROON_EMAIL=
 LOG_LEVEL=info
 DEBUG_DISCORD_PAYLOAD=false
 MEMORY_LOG_MS=300000
-ALBUM_ART_PUBLIC_BASE_URL=https://your-public-url.example.com
+ALBUM_ART_PUBLIC_BASE_URL=https://art.darthspader.com
 ALBUM_ART_PROXY_PORT=8787
 ALBUM_ART_CACHE_MAX=40
 ```
@@ -64,7 +64,7 @@ Roon album art lives on your local network, and Discord cannot load that private
 To show art in Discord, expose this CLI's album-art proxy with a public HTTPS URL, then set:
 
 ```env
-ALBUM_ART_PUBLIC_BASE_URL=https://your-public-url.example.com
+ALBUM_ART_PUBLIC_BASE_URL=https://art.darthspader.com
 ALBUM_ART_PROXY_PORT=8787
 ```
 
@@ -97,4 +97,5 @@ If memory grows unexpectedly, keep `MEMORY_LOG_MS=300000` and compare the period
 ```powershell
 npm test
 ```
+
 
