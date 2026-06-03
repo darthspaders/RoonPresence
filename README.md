@@ -1,0 +1,100 @@
+# RoonPresence
+
+Command-line MVP for publishing the active Roon HQPlayer zone to Discord Rich Presence.
+
+## Install
+
+```powershell
+cd RoonPresence
+npm install
+copy .env.example .env
+notepad .env
+```
+
+Set `DISCORD_CLIENT_ID` to your Discord application's client ID.
+
+## Known Good `.env`
+
+```env
+DISCORD_CLIENT_ID=your_discord_application_client_id
+HQPLAYER_ZONE_MATCH=HQPlayer
+HQPLAYER_SIGNAL_PATH_STATIC=
+HQPLAYER_SIGNAL_PATH_PREFIX=poly-sinc-gauss-hires-lp, PCM
+HQPLAYER_SIGNAL_PATH_COMMAND=
+HQPLAYER_STATUS_COMMAND=
+HQPLAYER_RATE_COMMAND="C:\Program Files\Signalyst\HQPlayer 5 Desktop\hqp5-control.exe" localhost --state
+HQPLAYER_SIGNAL_PATH_POLL_MS=60000
+ROON_EXTENSION_ID=com.example.roon-discord-cli
+ROON_DISPLAY_NAME=RoonPresence
+ROON_DISPLAY_VERSION=0.1.0
+ROON_PUBLISHER=Local CLI
+ROON_EMAIL=
+LOG_LEVEL=info
+DEBUG_DISCORD_PAYLOAD=false
+MEMORY_LOG_MS=300000
+ALBUM_ART_PUBLIC_BASE_URL=https://your-public-url.example.com
+ALBUM_ART_PROXY_PORT=8787
+ALBUM_ART_CACHE_MAX=40
+```
+
+## Run
+
+```powershell
+npm start
+```
+
+The first run waits for Roon authorization. In Roon, go to **Settings > Extensions** and enable **RoonPresence**.
+
+Expected startup lines include:
+
+```text
+INFO Startup health check ...
+INFO Connected to Discord via discord-rpc
+INFO Searching for Roon Core
+INFO Paired with Roon Core: ...
+INFO Using HQPlayer zone: HQPlayer
+INFO HQPlayer signal path: ...
+INFO Publishing Discord presence: ...
+```
+
+## Album Art
+
+Roon album art lives on your local network, and Discord cannot load that private URL directly.
+
+To show art in Discord, expose this CLI's album-art proxy with a public HTTPS URL, then set:
+
+```env
+ALBUM_ART_PUBLIC_BASE_URL=https://your-public-url.example.com
+ALBUM_ART_PROXY_PORT=8787
+```
+
+When this is not set, the app logs that album art was found but does not send the private Roon URL to Discord.
+
+## Stability Checks
+
+Use this quick pass after changes:
+
+1. Start Discord before the CLI.
+2. Start Roon and play a normal local track through the HQPlayer zone.
+3. Confirm Discord shows album art, elapsed/total time, and HQPlayer signal path.
+4. Switch PCM to SDM/DSD in HQPlayer and confirm the signal path updates.
+5. Switch to DI.FM/radio and confirm there is no end time/progress total from the previous track.
+6. Stop playback and confirm Discord clears.
+7. Restart Discord while the CLI is running and confirm it reconnects.
+
+## Troubleshooting
+
+If the default app image appears instead of album art, check `ALBUM_ART_PUBLIC_BASE_URL`. Discord must be able to fetch that URL from the internet.
+
+If Roon is stuck at startup, open **Settings > Extensions** in Roon and enable **RoonPresence**.
+
+If HQPlayer sample rate does not update, confirm `HQPLAYER_RATE_COMMAND` points to `hqp5-control.exe` and includes `localhost --state`.
+
+If memory grows unexpectedly, keep `MEMORY_LOG_MS=300000` and compare the periodic memory lines over a few hours.
+
+## Test
+
+```powershell
+npm test
+```
+

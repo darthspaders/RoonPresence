@@ -1,0 +1,20 @@
+{
+  "name": "roonpresence",
+  "version": "0.1.0",
+  "description": "Command-line MVP for showing Roon HQPlayer playback in Discord Rich Presence.",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "discord-rpc": "^4.0.1",
+    "node-pty": "^1.1.0",
+    "roon-api": "github:roonlabs/node-roon-api",
+    "roon-api-transport": "github:roonlabs/node-roon-api-transport"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
