@@ -35,8 +35,6 @@ HQPLAYER_SIGNAL_PATH_POLL_MS=60000
 ROON_EXTENSION_ID=com.example.roon-discord-cli
 ROON_DISPLAY_NAME=RoonPresence
 ROON_DISPLAY_VERSION=0.1.0
-ROON_PUBLISHER=Local CLI
-ROON_EMAIL=
 LOG_LEVEL=info
 DEBUG_DISCORD_PAYLOAD=false
 MEMORY_LOG_MS=300000
@@ -105,6 +103,7 @@ If memory grows unexpectedly, keep `MEMORY_LOG_MS=300000` and compare the period
 ```powershell
 npm test
 ```
+
 
 
 
