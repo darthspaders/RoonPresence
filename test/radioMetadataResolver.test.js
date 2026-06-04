@@ -177,5 +177,10 @@ test("resolver falls back to title-only MusicBrainz lookup", async () => {
   assert.match(decodeURIComponent(requested[0]), /recording:"Veil Remover"/);
   assert.doesNotMatch(decodeURIComponent(requested[0]), /artist:/);
 });
-
+test("parses station-prefixed artist-title metadata", () => {
+  assert.deepEqual(
+    parseRadioTrack({ title: "Insomniac|MPACT - Sully - Eraser", artist: "Insomniac Radio" }),
+    { artist: "Sully", title: "Eraser" }
+  );
+});
 

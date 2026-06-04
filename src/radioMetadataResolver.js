@@ -36,7 +36,10 @@ function splitArtistTitle(value) {
     const a = cleanText(left);
     const b = cleanText(right);
     if (!a || !b || isStationText(b)) continue;
-    if (isStationText(a)) return { artist: "", title: b };
+    if (isStationText(a)) {
+      const nested = splitArtistTitle(b);
+      return nested || { artist: "", title: b };
+    }
     return { artist: a, title: b };
   }
 
