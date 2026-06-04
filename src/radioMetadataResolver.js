@@ -13,7 +13,7 @@ function normalizeKeyPart(value) {
 }
 
 function isStationText(value) {
-  return /\b(?:di\.?fm|radio|house|trance|progressive|channel|station|live)\b/i.test(cleanText(value));
+  return /\b(?:di\.?fm|radio|house|trance|progressive|channel|station|live|insomniac|mpact|impact|bangers)\b|\|/i.test(cleanText(value));
 }
 
 function stripRadioNoise(value) {
@@ -35,9 +35,9 @@ function splitArtistTitle(value) {
     const right = rest.join(separator);
     const a = cleanText(left);
     const b = cleanText(right);
-    if (a && b && !isStationText(a) && !isStationText(b)) {
-      return { artist: a, title: b };
-    }
+    if (!a || !b || isStationText(b)) continue;
+    if (isStationText(a)) return { artist: "", title: b };
+    return { artist: a, title: b };
   }
 
   return null;
@@ -182,7 +182,8 @@ class RadioMetadataResolver extends EventEmitter {
       const value = await this.lookup(item.track, item.key);
       this.remember(item.key, value ? { status: "found", value } : { status: "missing" });
       if (value) {
-        this.logger?.info?.(`Resolved radio metadata: ${item.track.artist} - ${item.track.title}`);
+        const label = item.track.artist ? `${item.track.artist} - ${item.track.title}` : item.track.title;
+        this.logger?.info?.(`Resolved radio metadata: ${label}`);
         this.emit("metadataResolved", value);
       }
     } catch (error) {
@@ -197,10 +198,7 @@ class RadioMetadataResolver extends EventEmitter {
   }
 
   async lookup(track, key) {
-    const query = `recording:"${track.title}" AND artist:"${track.artist}"`;
-    const searchUrl = `https://musicbrainz.org/ws/2/recording?query=${encodeURIComponent(query)}&fmt=json&limit=5&inc=releases+artist-credits`;
-    const searchJson = await this.fetchJson(searchUrl);
-    const recordings = Array.isArray(searchJson?.recordings) ? searchJson.recordings : [];
+    const recordings = await this.searchRecordings(track);
 
     for (const recording of recordings) {
       const release = chooseRelease(recording);
@@ -224,6 +222,23 @@ class RadioMetadataResolver extends EventEmitter {
     }
 
     return null;
+  }
+
+  async searchRecordings(track) {
+    const queries = [];
+    if (track.artist) {
+      queries.push(`recording:"${track.title}" AND artist:"${track.artist}"`);
+    }
+    queries.push(`recording:"${track.title}"`);
+
+    for (const query of queries) {
+      const searchUrl = `https://musicbrainz.org/ws/2/recording?query=${encodeURIComponent(query)}&fmt=json&limit=5&inc=releases+artist-credits`;
+      const searchJson = await this.fetchJson(searchUrl);
+      const recordings = Array.isArray(searchJson?.recordings) ? searchJson.recordings : [];
+      if (recordings.length) return recordings;
+    }
+
+    return [];
   }
 
   remember(key, entry) {

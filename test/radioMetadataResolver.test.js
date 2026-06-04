@@ -129,4 +129,53 @@ test("resolver does not run for local tracks", () => {
   assert.equal(resolver.apply(presence), false);
   assert.equal(resolver.queue.length, 0);
 });
+test("parses station-prefixed title as title-only lookup", () => {
+  assert.deepEqual(
+    parseRadioTrack({ title: "Insomniac|MPACT - Veil Remover", artist: "Insomniac Radio" }),
+    { artist: "", title: "Veil Remover" }
+  );
+});
+
+test("resolver falls back to title-only MusicBrainz lookup", async () => {
+  const requested = [];
+  const resolver = new RadioMetadataResolver({
+    fetchJson: async (url) => {
+      requested.push(url);
+      if (url.includes("musicbrainz.org")) {
+        return {
+          recordings: [
+            {
+              title: "Veil Remover",
+              releases: [
+                {
+                  id: "release-2",
+                  title: "Veil Remover",
+                  "release-group": { id: "group-2" }
+                }
+              ]
+            }
+          ]
+        };
+      }
+      return {
+        images: [
+          {
+            front: true,
+            thumbnails: { "500": "https://archive.org/veil-remover.jpg" }
+          }
+        ]
+      };
+    }
+  });
+
+  const result = await resolver.lookup(
+    { artist: "", title: "Veil Remover" },
+    "|veil remover"
+  );
+
+  assert.equal(result.albumArtUrl, "https://archive.org/veil-remover.jpg");
+  assert.match(decodeURIComponent(requested[0]), /recording:"Veil Remover"/);
+  assert.doesNotMatch(decodeURIComponent(requested[0]), /artist:/);
+});
+
 
