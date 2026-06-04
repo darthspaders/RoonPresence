@@ -3,6 +3,7 @@ const test = require("node:test");
 const {
   RadioMetadataResolver,
   chooseCoverImage,
+  chooseDiscogsResult,
   getRadioStationName,
   makeLookupKey,
   parseRadioTrack
@@ -70,6 +71,18 @@ test("extracts radio station display name", () => {
   );
 });
 
+test("chooses usable Discogs cover image", () => {
+  assert.deepEqual(
+    chooseDiscogsResult({
+      results: [
+        { title: "Spacer", cover_image: "https://st.discogs.com/images/spacer.gif" },
+        { title: "PRAANA - Asylum", cover_image: "https://img.discogs.com/asylum.jpg" }
+      ]
+    }),
+    { title: "PRAANA - Asylum", coverImage: "https://img.discogs.com/asylum.jpg" }
+  );
+});
+
 test("chooses front cover image thumbnail", () => {
   assert.equal(
     chooseCoverImage({
@@ -86,6 +99,80 @@ test("chooses front cover image thumbnail", () => {
     }),
     "https://archive.org/cover-500.jpg"
   );
+});
+
+test("resolver prefers Discogs artwork when token is configured", async () => {
+  const requested = [];
+  const resolver = new RadioMetadataResolver({
+    discogsToken: "secret-token",
+    fetchJson: async (url, options = {}) => {
+      requested.push({ url, options });
+      assert.equal(url.startsWith("https://api.discogs.com/database/search"), true);
+      assert.equal(options.headers.authorization, "Discogs token=secret-token");
+      return {
+        results: [
+          {
+            title: "PRAANA - Asylum",
+            cover_image: "https://img.discogs.com/asylum.jpg"
+          }
+        ]
+      };
+    }
+  });
+
+  const result = await resolver.lookup(
+    { artist: "PRAANA", title: "Asylum" },
+    "praana|asylum"
+  );
+
+  assert.equal(result.source, "discogs");
+  assert.equal(result.albumArtUrl, "https://img.discogs.com/asylum.jpg");
+  assert.equal(result.album, "PRAANA - Asylum");
+  assert.equal(requested.length, 1);
+});
+
+test("Discogs miss falls back to MusicBrainz artwork", async () => {
+  const requested = [];
+  const resolver = new RadioMetadataResolver({
+    discogsToken: "secret-token",
+    fetchJson: async (url) => {
+      requested.push(url);
+      if (url.includes("discogs.com")) return { results: [] };
+      if (url.includes("musicbrainz.org")) {
+        return {
+          recordings: [
+            {
+              title: "Whisper",
+              releases: [
+                {
+                  id: "release-1",
+                  title: "Album Name",
+                  "release-group": { id: "group-1" }
+                }
+              ]
+            }
+          ]
+        };
+      }
+      return {
+        images: [
+          {
+            front: true,
+            thumbnails: { "500": "https://archive.org/whisper.jpg" }
+          }
+        ]
+      };
+    }
+  });
+
+  const result = await resolver.lookup(
+    { artist: "Boombox Cartel", title: "Whisper" },
+    "boombox cartel|whisper"
+  );
+
+  assert.equal(result.albumArtUrl, "https://archive.org/whisper.jpg");
+  assert.equal(requested.some((url) => url.includes("discogs.com")), true);
+  assert.equal(requested.some((url) => url.includes("musicbrainz.org")), true);
 });
 
 test("resolver looks up MusicBrainz and Cover Art Archive metadata", async () => {

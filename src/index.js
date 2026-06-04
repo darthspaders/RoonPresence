@@ -47,6 +47,8 @@ function main() {
     enabled: config.radioMetadata.enabled,
     cacheMax: config.radioMetadata.cacheMax,
     minLookupIntervalMs: config.radioMetadata.minLookupIntervalMs,
+    discogsEnabled: config.radioMetadata.discogsEnabled,
+    discogsToken: config.radioMetadata.discogsToken,
     logger
   });
   const publisher = new PresencePublisher({
@@ -125,7 +127,9 @@ function main() {
         const radioMetadataChanged = radioMetadataResolver.updateConfig({
           enabled: freshConfig.radioMetadata.enabled,
           cacheMax: freshConfig.radioMetadata.cacheMax,
-          minLookupIntervalMs: freshConfig.radioMetadata.minLookupIntervalMs
+          minLookupIntervalMs: freshConfig.radioMetadata.minLookupIntervalMs,
+          discogsEnabled: freshConfig.radioMetadata.discogsEnabled,
+          discogsToken: freshConfig.radioMetadata.discogsToken
         });
         if (changed || albumArtChanged || radioMetadataChanged) {
           logger.info("Reloaded settings from .env");
@@ -177,3 +181,4 @@ function main() {
 }
 
 main();
+

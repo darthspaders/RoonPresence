@@ -151,6 +151,21 @@ function chooseCoverImage(coverJson) {
       front.image
   );
 }
+function isUsableDiscogsImage(value) {
+  const url = cleanText(value);
+  return !!url && !/spacer\.gif/i.test(url);
+}
+
+function chooseDiscogsResult(searchJson) {
+  const results = Array.isArray(searchJson?.results) ? searchJson.results : [];
+  const result = results.find((entry) => isUsableDiscogsImage(entry?.cover_image));
+  if (!result) return null;
+
+  return {
+    title: cleanText(result.title),
+    coverImage: cleanText(result.cover_image)
+  };
+}
 
 class RadioMetadataResolver extends EventEmitter {
   constructor({
@@ -158,6 +173,8 @@ class RadioMetadataResolver extends EventEmitter {
     cacheMax = DEFAULT_CACHE_MAX,
     minLookupIntervalMs = DEFAULT_MIN_LOOKUP_INTERVAL_MS,
     logger,
+    discogsEnabled = true,
+    discogsToken = "",
     fetchJson = defaultFetchJson,
     clock = () => Date.now()
   } = {}) {
@@ -166,6 +183,8 @@ class RadioMetadataResolver extends EventEmitter {
     this.cacheMax = Number(cacheMax) || DEFAULT_CACHE_MAX;
     this.minLookupIntervalMs = Number(minLookupIntervalMs) || DEFAULT_MIN_LOOKUP_INTERVAL_MS;
     this.logger = logger;
+    this.discogsEnabled = !!discogsEnabled;
+    this.discogsToken = cleanText(discogsToken);
     this.fetchJson = fetchJson;
     this.clock = clock;
     this.cache = new Map();
@@ -263,6 +282,9 @@ class RadioMetadataResolver extends EventEmitter {
   }
 
   async lookup(track, key) {
+    const discogs = await this.lookupDiscogs(track, key);
+    if (discogs) return discogs;
+
     const recordings = await this.searchRecordings(track);
 
     for (const recording of recordings) {
@@ -283,6 +305,54 @@ class RadioMetadataResolver extends EventEmitter {
         artist: track.artist,
         album: cleanText(release.title || recording.title),
         albumArtUrl
+      };
+    }
+
+    return null;
+  }
+
+  async lookupDiscogs(track, key) {
+    if (!this.discogsEnabled || !this.discogsToken) return null;
+
+    try {
+      return await this.searchDiscogs(track, key);
+    } catch (error) {
+      this.logger?.debug?.("Discogs lookup failed", { error: error.message });
+      return null;
+    }
+  }
+
+  async searchDiscogs(track, key) {
+    const searches = [];
+    if (track.artist) {
+      searches.push({ artist: track.artist, track: track.title });
+      searches.push({ q: `${track.artist} ${track.title}` });
+    }
+    searches.push({ q: track.title });
+
+    for (const params of searches) {
+      const searchUrl = new URL("https://api.discogs.com/database/search");
+      searchUrl.searchParams.set("type", "release");
+      searchUrl.searchParams.set("per_page", "5");
+      for (const [name, value] of Object.entries(params)) {
+        if (value) searchUrl.searchParams.set(name, value);
+      }
+
+      const searchJson = await this.fetchJson(searchUrl.toString(), {
+        headers: {
+          authorization: `Discogs token=${this.discogsToken}`
+        }
+      });
+      const result = chooseDiscogsResult(searchJson);
+      if (!result) continue;
+
+      return {
+        key,
+        title: track.title,
+        artist: track.artist,
+        album: cleanText(result.title),
+        albumArtUrl: result.coverImage,
+        source: "discogs"
       };
     }
 
@@ -316,20 +386,27 @@ class RadioMetadataResolver extends EventEmitter {
     }
   }
 
-  updateConfig({ enabled, cacheMax, minLookupIntervalMs } = {}) {
+  updateConfig({ enabled, cacheMax, minLookupIntervalMs, discogsEnabled, discogsToken } = {}) {
     const nextEnabled = enabled !== undefined ? !!enabled : this.enabled;
     const nextCacheMax = Number(cacheMax) || this.cacheMax;
     const nextMinLookupIntervalMs = Number(minLookupIntervalMs) || this.minLookupIntervalMs;
+    const nextDiscogsEnabled = discogsEnabled !== undefined ? !!discogsEnabled : this.discogsEnabled;
+    const nextDiscogsToken = discogsToken !== undefined ? cleanText(discogsToken) : this.discogsToken;
     const changed =
       nextEnabled !== this.enabled ||
       nextCacheMax !== this.cacheMax ||
-      nextMinLookupIntervalMs !== this.minLookupIntervalMs;
+      nextMinLookupIntervalMs !== this.minLookupIntervalMs ||
+      nextDiscogsEnabled !== this.discogsEnabled ||
+      nextDiscogsToken !== this.discogsToken;
 
     if (!changed) return false;
 
     this.enabled = nextEnabled;
     this.cacheMax = nextCacheMax;
     this.minLookupIntervalMs = nextMinLookupIntervalMs;
+    this.discogsEnabled = nextDiscogsEnabled;
+    this.discogsToken = nextDiscogsToken;
+    this.cache.clear();
     return true;
   }
 
@@ -347,5 +424,7 @@ module.exports = {
   makeLookupKey,
   chooseCoverImage,
   chooseRelease,
+  chooseDiscogsResult,
   getRadioStationName
 };
+

@@ -74,7 +74,9 @@ function configFromEnv(env) {
     radioMetadata: {
       enabled: !/^(0|false|no)$/i.test(env.RADIO_METADATA_LOOKUP || "true"),
       cacheMax: Number(env.RADIO_METADATA_CACHE_MAX || 200),
-      minLookupIntervalMs: Number(env.RADIO_METADATA_MIN_LOOKUP_INTERVAL_MS || 1500)
+      minLookupIntervalMs: Number(env.RADIO_METADATA_MIN_LOOKUP_INTERVAL_MS || 1500),
+      discogsEnabled: !/^(0|false|no)$/i.test(env.DISCOGS_LOOKUP || "true"),
+      discogsToken: env.DISCOGS_TOKEN || ""
     },
     roon: {
       extension_id: env.ROON_EXTENSION_ID || "com.example.roon-discord-cli",

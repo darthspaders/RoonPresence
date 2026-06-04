@@ -45,6 +45,8 @@ ALBUM_ART_CACHE_MAX=40
 RADIO_METADATA_LOOKUP=true
 RADIO_METADATA_CACHE_MAX=200
 RADIO_METADATA_MIN_LOOKUP_INTERVAL_MS=1500
+DISCOGS_LOOKUP=true
+DISCOGS_TOKEN=
 ```
 
 ## Run
@@ -82,7 +84,7 @@ When this is not set, the app logs that album art was found but does not send th
 
 ## Radio Metadata
 
-For radio streams that only provide station artwork, RoonPresence can look up track artwork from MusicBrainz and Cover Art Archive using the live artist/title text from Roon. Results are cached in memory and lookups are rate-limited by `RADIO_METADATA_MIN_LOOKUP_INTERVAL_MS`.
+For radio streams that only provide station artwork, RoonPresence can look up track artwork using the live artist/title text from Roon. Discogs is tried first when `DISCOGS_TOKEN` is set, then MusicBrainz and Cover Art Archive are used as fallback. Results are cached in memory and lookups are rate-limited by `RADIO_METADATA_MIN_LOOKUP_INTERVAL_MS`.
 
 If lookup fails or the stream only reports station text, RoonPresence uses `DISCORD_DEFAULT_IMAGE_KEY` so Discord shows the app artwork and can still display the station name as image text.
 
