@@ -3,6 +3,7 @@ const test = require("node:test");
 const {
   RadioMetadataResolver,
   chooseCoverImage,
+  getRadioStationName,
   makeLookupKey,
   parseRadioTrack
 } = require("../src/radioMetadataResolver");
@@ -33,6 +34,28 @@ test("parses DI.FM station title with artist-title subtitle", () => {
       album: "DI.FM"
     }),
     { artist: "E-Clip", title: "Indian Spirit" }
+  );
+});
+
+test("fills missing artist from separate field when title has station prefix", () => {
+  assert.deepEqual(
+    parseRadioTrack({
+      title: "04 Progressive Psy - Indian Spirit",
+      artist: "E-Clip",
+      album: "DI.FM"
+    }),
+    { artist: "E-Clip", title: "Indian Spirit" }
+  );
+});
+
+test("extracts radio station display name", () => {
+  assert.equal(
+    getRadioStationName({
+      title: "04 Progressive Psy - DI.FM Premium",
+      artist: "E-Clip - Indian Spirit",
+      album: "DI.FM"
+    }),
+    "04 Progressive Psy - DI.FM Premium"
   );
 });
 
@@ -145,6 +168,7 @@ test("resolver marks pending radio artwork as unresolved for the current track",
   assert.equal(resolver.apply(presence), false);
   assert.equal(presence.metadata.radioTrackKey, "sully|eraser");
   assert.equal(presence.metadata.radioArtworkResolved, false);
+  assert.equal(presence.metadata.radioStationName, "Insomniac|MPACT");
   assert.equal(resolver.queue.length, 1);
   resolver.stop();
 });

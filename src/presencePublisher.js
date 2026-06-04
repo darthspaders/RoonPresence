@@ -166,7 +166,9 @@ class PresencePublisher {
   }
 
   createLargeImageText(presence) {
-    if (presence.timestampMode === "RADIO") return "";
+    if (presence.timestampMode === "RADIO") {
+      return cleanText(presence.metadata?.radioStationName).slice(0, 128);
+    }
 
     const album = cleanText(presence.metadata?.album);
     const title = normalizeText(presence.metadata?.title);

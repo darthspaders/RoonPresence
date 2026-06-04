@@ -13,7 +13,34 @@ function normalizeKeyPart(value) {
 }
 
 function isStationText(value) {
-  return /\b(?:di\.?fm|radio|house|trance|progressive|channel|station|live|insomniac|mpact|impact|bangers)\b|\|/i.test(cleanText(value));
+  return /\b(?:di\.?fm|radio|house|trance|progressive|channel|station|live|insomniac|mpact|impact|bangers|psy)\b|\|/i.test(cleanText(value));
+}
+
+function firstText(...values) {
+  for (const value of values) {
+    const text = cleanText(value);
+    if (text) return text;
+  }
+  return "";
+}
+
+function cleanStationName(value) {
+  const text = cleanText(value);
+  if (!isStationText(text)) return "";
+
+  for (const separator of [" - ", " \u2013 ", " \u2014 "]) {
+    if (!text.includes(separator)) continue;
+    const [left, ...rest] = text.split(separator);
+    const right = rest.join(separator);
+    if (text.includes("|") || !isStationText(right)) return cleanText(left);
+  }
+
+  return text;
+}
+
+function getRadioStationName(metadata = {}) {
+  const candidates = [metadata.radioStationName, metadata.originalTitle, metadata.title, metadata.album];
+  return firstText(...candidates.map((value) => cleanStationName(value)));
 }
 
 function stripRadioNoise(value) {
@@ -50,17 +77,30 @@ function parseRadioTrack(metadata = {}) {
   const title = stripRadioNoise(metadata.title);
   const artist = stripRadioNoise(metadata.artist);
   const album = stripRadioNoise(metadata.album);
+  const titleLooksStation = isStationText(title);
+  const artistLooksStation = isStationText(artist);
 
-  for (const value of [title, artist, album]) {
+  const artistParsed = splitArtistTitle(artist);
+  if (artistParsed && titleLooksStation) return artistParsed;
+
+  const titleParsed = splitArtistTitle(title);
+  if (titleParsed) {
+    if (!titleParsed.artist && artist && !artistLooksStation) {
+      return { artist, title: titleParsed.title };
+    }
+    return titleParsed;
+  }
+
+  for (const value of [artist, album]) {
     const parsed = splitArtistTitle(value);
     if (parsed) return parsed;
   }
 
-  if (title && artist && !isStationText(title) && !isStationText(artist)) {
+  if (title && artist && !titleLooksStation && !artistLooksStation) {
     return { title, artist };
   }
 
-  if (title && artist && !isStationText(artist)) {
+  if (title && artist && !artistLooksStation) {
     return { title, artist };
   }
 
@@ -134,6 +174,9 @@ class RadioMetadataResolver extends EventEmitter {
 
   apply(presence) {
     if (!this.enabled || presence?.timestampMode !== "RADIO") return false;
+
+    const stationName = getRadioStationName(presence.metadata);
+    if (stationName) presence.metadata.radioStationName = stationName;
 
     const track = parseRadioTrack(presence.metadata);
     if (!track) return false;
@@ -299,5 +342,6 @@ module.exports = {
   parseRadioTrack,
   makeLookupKey,
   chooseCoverImage,
-  chooseRelease
+  chooseRelease,
+  getRadioStationName
 };

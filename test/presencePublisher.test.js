@@ -322,7 +322,7 @@ test("album art proxy URL is sent as Discord large image", () => {
   assert.equal(harness.published[0].largeImageText, "Album");
 });
 
-test("radio album art does not add duplicate track text", () => {
+test("radio album art shows station name as asset text", () => {
   const harness = createHarness();
   harness.publisher.albumArtProvider = {
     getPublicUrl: () => "https://roon-art.example.com/art/radio.jpg"
@@ -343,12 +343,13 @@ test("radio album art does not add duplicate track text", () => {
       albumArtUrl: "https://archive.org/epic.jpg",
       albumArtKey: "radio:morttagua|epic of gilgamesh",
       radioTrackKey: "morttagua|epic of gilgamesh",
-      radioArtworkResolved: true
+      radioArtworkResolved: true,
+      radioStationName: "Progressive House - DI.FM"
     }
   });
 
   assert.equal(activity.largeImageKey, "https://roon-art.example.com/art/radio.jpg");
-  assert.equal("largeImageText" in activity, false);
+  assert.equal(activity.largeImageText, "Progressive House - DI.FM");
 });
 
 test("stale resolved radio artwork is not sent for a different track", () => {
