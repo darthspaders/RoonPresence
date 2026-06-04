@@ -14,6 +14,12 @@ function normalizeText(value) {
   return cleanText(value).toLowerCase();
 }
 
+function formatTrackLine(title, artist) {
+  const cleanTitle = cleanText(title);
+  const cleanArtist = cleanText(artist);
+  return (cleanArtist ? `${cleanTitle} - ${cleanArtist}` : cleanTitle).slice(0, 128);
+}
+
 class PresencePublisher {
   constructor({
     discord,
@@ -129,7 +135,7 @@ class PresencePublisher {
     if (!signalPath) return;
 
     presence.metadata.signalPath = signalPath;
-    presence.activity.details = `${presence.metadata.title} - ${presence.metadata.artist}`.slice(0, 128);
+    presence.activity.details = formatTrackLine(presence.metadata.title, presence.metadata.artist);
     presence.activity.state = signalPath.slice(0, 128);
   }
 

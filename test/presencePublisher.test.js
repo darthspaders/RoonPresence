@@ -262,6 +262,27 @@ test("signal path changes republish presence", () => {
   assert.equal(harness.published[1].state, "poly-sinc-gauss-hires-mp, DSD256");
 });
 
+test("signal path omits separator for title-only radio track", () => {
+  const harness = createHarnessWithSignalPath("poly-sinc-gauss-hires-lp, SDM, DSD512");
+  harness.publisher.radioMetadataResolver = new RadioMetadataResolver({
+    enabled: true,
+    minLookupIntervalMs: 60_000
+  });
+
+  assert.equal(
+    harness.publisher.publishZone(
+      radioZone({
+        title: "Progressive House -DI.FM",
+        artist: "Apollo (Fuenka Remix)"
+      })
+    ),
+    true
+  );
+
+  assert.equal(harness.published[0].details, "Apollo (Fuenka Remix)");
+  assert.equal(harness.published[0].state, "poly-sinc-gauss-hires-lp, SDM, DSD512");
+});
+
 test("radio metadata resolver updates title before signal path", () => {
   const harness = createHarnessWithSignalPath("poly-sinc-gauss-hires-lp, SDM, DSD512");
   harness.publisher.radioMetadataResolver = new RadioMetadataResolver({

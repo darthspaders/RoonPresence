@@ -48,6 +48,17 @@ test("fills missing artist from separate field when title has station prefix", (
   );
 });
 
+test("parses station title plus plain subtitle as title-only track", () => {
+  assert.deepEqual(
+    parseRadioTrack({
+      title: "Progressive House -DI.FM",
+      artist: "Apollo (Fuenka Remix)",
+      album: "DI.FM"
+    }),
+    { artist: "", title: "Apollo (Fuenka Remix)" }
+  );
+});
+
 test("extracts radio station display name", () => {
   assert.equal(
     getRadioStationName({
@@ -170,6 +181,29 @@ test("resolver marks pending radio artwork as unresolved for the current track",
   assert.equal(presence.metadata.radioArtworkResolved, false);
   assert.equal(presence.metadata.radioStationName, "Insomniac|MPACT");
   assert.equal(resolver.queue.length, 1);
+  resolver.stop();
+});
+
+test("resolver clears artist for title-only radio tracks", () => {
+  const resolver = new RadioMetadataResolver({ enabled: true, minLookupIntervalMs: 60_000 });
+  const presence = {
+    timestampMode: "RADIO",
+    activity: {
+      details: "Progressive House -DI.FM",
+      state: "Apollo (Fuenka Remix)"
+    },
+    metadata: {
+      title: "Progressive House -DI.FM",
+      artist: "Apollo (Fuenka Remix)",
+      album: "DI.FM"
+    }
+  };
+
+  assert.equal(resolver.apply(presence), false);
+  assert.equal(presence.metadata.title, "Apollo (Fuenka Remix)");
+  assert.equal(presence.metadata.artist, "");
+  assert.equal(presence.activity.details, "Apollo (Fuenka Remix)");
+  assert.equal(presence.activity.state, "Progressive House -DI.FM");
   resolver.stop();
 });
 

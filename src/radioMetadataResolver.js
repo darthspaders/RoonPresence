@@ -100,6 +100,10 @@ function parseRadioTrack(metadata = {}) {
     return { title, artist };
   }
 
+  if (title && artist && titleLooksStation && !artistLooksStation) {
+    return { artist: "", title: artist };
+  }
+
   if (title && artist && !artistLooksStation) {
     return { title, artist };
   }
@@ -199,12 +203,12 @@ class RadioMetadataResolver extends EventEmitter {
 
   applyParsedTrack(presence, track) {
     if (track.title) presence.metadata.title = track.title;
-    if (track.artist) presence.metadata.artist = track.artist;
+    presence.metadata.artist = track.artist || "";
 
     if (presence.metadata.signalPath || !presence.activity) return;
 
     if (track.title) presence.activity.details = track.title.slice(0, 128);
-    if (track.artist) presence.activity.state = track.artist.slice(0, 128);
+    presence.activity.state = (track.artist || presence.metadata.radioStationName || "").slice(0, 128);
   }
 
   applyResolvedMetadata(presence, value) {
