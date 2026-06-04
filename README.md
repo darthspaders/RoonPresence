@@ -25,6 +25,7 @@ This creates your personal `.env` config file. Set `DISCORD_CLIENT_ID` in `.env`
 
 ```env
 DISCORD_CLIENT_ID=your_discord_application_client_id
+DISCORD_DEFAULT_IMAGE_KEY=roonpresence
 HQPLAYER_ZONE_MATCH=HQPlayer
 HQPLAYER_SIGNAL_PATH_STATIC=
 HQPLAYER_SIGNAL_PATH_PREFIX=poly-sinc-gauss-hires-lp, PCM
@@ -83,7 +84,7 @@ When this is not set, the app logs that album art was found but does not send th
 
 For radio streams that only provide station artwork, RoonPresence can look up track artwork from MusicBrainz and Cover Art Archive using the live artist/title text from Roon. Results are cached in memory and lookups are rate-limited by `RADIO_METADATA_MIN_LOOKUP_INTERVAL_MS`.
 
-If lookup fails or the stream only reports station text, RoonPresence omits the station image so Discord falls back to the app artwork instead of showing stale radio art.
+If lookup fails or the stream only reports station text, RoonPresence uses `DISCORD_DEFAULT_IMAGE_KEY` so Discord shows the app artwork and can still display the station name as image text.
 
 ## Stability Checks
 

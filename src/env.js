@@ -54,6 +54,7 @@ function readConfigFresh() {
 function configFromEnv(env) {
   return {
     discordClientId: env.DISCORD_CLIENT_ID || "",
+    discordDefaultImageKey: env.DISCORD_DEFAULT_IMAGE_KEY || "roonpresence",
     hqplayerZoneMatch: env.HQPLAYER_ZONE_MATCH || "HQPlayer",
     hqplayer: {
       signalPathCommand: env.HQPLAYER_SIGNAL_PATH_COMMAND || "",
@@ -87,4 +88,3 @@ function configFromEnv(env) {
 }
 
 module.exports = { loadDotEnv, readConfig, readConfigFresh, readDotEnvFile };
-

@@ -373,8 +373,9 @@ test("radio album art shows station name as asset text", () => {
   assert.equal(activity.largeImageText, "Progressive House - DI.FM");
 });
 
-test("stale resolved radio artwork is not sent for a different track", () => {
+test("stale resolved radio artwork falls back to Discord app artwork", () => {
   const harness = createHarness();
+  harness.publisher.defaultImageKey = "roonpresence";
   harness.publisher.albumArtProvider = {
     getPublicUrl: () => "https://roon-art.example.com/art/old.jpg"
   };
@@ -394,16 +395,18 @@ test("stale resolved radio artwork is not sent for a different track", () => {
       albumArtUrl: "https://archive.org/old.jpg",
       albumArtKey: "radio:morttagua|epic of gilgamesh",
       radioTrackKey: "sully|eraser",
-      radioArtworkResolved: false
+      radioArtworkResolved: false,
+      radioStationName: "Insomniac Radio"
     }
   });
 
-  assert.equal("largeImageKey" in activity, false);
-  assert.equal("largeImageText" in activity, false);
+  assert.equal(activity.largeImageKey, "roonpresence");
+  assert.equal(activity.largeImageText, "Insomniac Radio");
 });
 
 test("unresolved radio station artwork falls back to Discord app artwork", () => {
   const harness = createHarness();
+  harness.publisher.defaultImageKey = "roonpresence";
   harness.publisher.albumArtProvider = {
     getPublicUrl: () => "https://roon-art.example.com/art/station.jpg"
   };
@@ -423,12 +426,13 @@ test("unresolved radio station artwork falls back to Discord app artwork", () =>
       albumArtUrl: "http://127.0.0.1:9100/api/image/station?scale=fill",
       albumArtKey: "station",
       radioTrackKey: "insomniac|mpact|new track",
-      radioArtworkResolved: false
+      radioArtworkResolved: false,
+      radioStationName: "Insomniac Radio"
     }
   });
 
-  assert.equal("largeImageKey" in activity, false);
-  assert.equal("largeImageText" in activity, false);
+  assert.equal(activity.largeImageKey, "roonpresence");
+  assert.equal(activity.largeImageText, "Insomniac Radio");
 });
 
 test("republishLast refreshes Discord when only HQPlayer signal path changes", () => {

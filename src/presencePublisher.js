@@ -28,6 +28,7 @@ class PresencePublisher {
     signalPathProvider,
     albumArtProvider,
     radioMetadataResolver,
+    defaultImageKey = "",
     clock = () => Date.now(),
     minPublishIntervalMs = DEFAULT_MIN_PUBLISH_INTERVAL_MS,
     startRoundingMs = DEFAULT_START_ROUNDING_MS,
@@ -39,6 +40,7 @@ class PresencePublisher {
     this.signalPathProvider = signalPathProvider;
     this.albumArtProvider = albumArtProvider;
     this.radioMetadataResolver = radioMetadataResolver;
+    this.defaultImageKey = defaultImageKey;
     this.clock = clock;
     this.minPublishIntervalMs = minPublishIntervalMs;
     this.startRoundingMs = startRoundingMs;
@@ -161,12 +163,10 @@ class PresencePublisher {
       delete rpcActivity.endTimestamp;
     }
 
-    const albumArtUrl = this.resolveAlbumArtUrl(presence);
-    if (albumArtUrl) {
-      rpcActivity.largeImageKey = albumArtUrl;
-      const largeImageText = this.createLargeImageText(presence);
-      if (largeImageText) rpcActivity.largeImageText = largeImageText;
-    }
+    const largeImageKey = this.resolveLargeImageKey(presence);
+    const largeImageText = this.createLargeImageText(presence);
+    if (largeImageKey) rpcActivity.largeImageKey = largeImageKey;
+    if (largeImageText && largeImageKey) rpcActivity.largeImageText = largeImageText;
 
     return rpcActivity;
   }
@@ -183,6 +183,10 @@ class PresencePublisher {
     if (!album || albumKey === title || albumKey === artist) return "";
 
     return album.slice(0, 128);
+  }
+
+  resolveLargeImageKey(presence) {
+    return this.resolveAlbumArtUrl(presence) || this.defaultImageKey;
   }
 
   resolveAlbumArtUrl(presence) {
@@ -224,7 +228,8 @@ class PresencePublisher {
       albumArtKey: presence.metadata.albumArtKey || "",
       albumArtUrl: presence.metadata.albumArtUrl || "",
       radioTrackKey: presence.metadata.radioTrackKey || "",
-      radioArtworkResolved: !!presence.metadata.radioArtworkResolved
+      radioArtworkResolved: !!presence.metadata.radioArtworkResolved,
+      defaultImageKey: this.defaultImageKey || ""
     };
   }
 

@@ -56,6 +56,7 @@ function main() {
     signalPathProvider: hqplayerStatus,
     albumArtProvider: albumArtProxy,
     radioMetadataResolver,
+    defaultImageKey: config.discordDefaultImageKey,
     debugPayload: config.debugDiscordPayload
   });
   const roon = new RoonClient({
@@ -176,4 +177,3 @@ function main() {
 }
 
 main();
-
