@@ -49,8 +49,8 @@ class PresencePublisher {
     this.lastZone = zone;
     const presence = this.mapper.mapPresence(zone);
     if (!presence) return false;
-    this.applyExternalSignalPath(presence);
     this.radioMetadataResolver?.apply?.(presence);
+    this.applyExternalSignalPath(presence);
 
     const signature = this.createSignature(presence);
     const identitySignature = this.createIdentitySignature(presence);

@@ -25,6 +25,17 @@ test("ignores station-only radio metadata", () => {
   assert.equal(parseRadioTrack({ title: "Progressive House -DI.FM", artist: "DI.FM" }), null);
 });
 
+test("parses DI.FM station title with artist-title subtitle", () => {
+  assert.deepEqual(
+    parseRadioTrack({
+      title: "04 Progressive Psy - DI.FM Premium",
+      artist: "E-Clip - Indian Spirit",
+      album: "DI.FM"
+    }),
+    { artist: "E-Clip", title: "Indian Spirit" }
+  );
+});
+
 test("chooses front cover image thumbnail", () => {
   assert.equal(
     chooseCoverImage({
@@ -135,6 +146,29 @@ test("resolver marks pending radio artwork as unresolved for the current track",
   assert.equal(presence.metadata.radioTrackKey, "sully|eraser");
   assert.equal(presence.metadata.radioArtworkResolved, false);
   assert.equal(resolver.queue.length, 1);
+  resolver.stop();
+});
+
+test("resolver applies parsed radio track text before artwork resolves", () => {
+  const resolver = new RadioMetadataResolver({ enabled: true, minLookupIntervalMs: 60_000 });
+  const presence = {
+    timestampMode: "RADIO",
+    activity: {
+      details: "04 Progressive Psy - DI.FM Premium",
+      state: "E-Clip - Indian Spirit"
+    },
+    metadata: {
+      title: "04 Progressive Psy - DI.FM Premium",
+      artist: "E-Clip - Indian Spirit",
+      album: "DI.FM"
+    }
+  };
+
+  assert.equal(resolver.apply(presence), false);
+  assert.equal(presence.metadata.title, "Indian Spirit");
+  assert.equal(presence.metadata.artist, "E-Clip");
+  assert.equal(presence.activity.details, "Indian Spirit");
+  assert.equal(presence.activity.state, "E-Clip");
   resolver.stop();
 });
 

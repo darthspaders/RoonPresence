@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const { PresenceMapper } = require("../src/presenceMapper");
 const { PresencePublisher } = require("../src/presencePublisher");
+const { RadioMetadataResolver } = require("../src/radioMetadataResolver");
 
 function createHarness() {
   let now = 2_000_000;
@@ -259,6 +260,27 @@ test("signal path changes republish presence", () => {
   assert.equal(harness.published.length, 2);
   assert.equal(harness.published[0].state, "poly-sinc-gauss-hires-mp, PCM, 768kHz");
   assert.equal(harness.published[1].state, "poly-sinc-gauss-hires-mp, DSD256");
+});
+
+test("radio metadata resolver updates title before signal path", () => {
+  const harness = createHarnessWithSignalPath("poly-sinc-gauss-hires-lp, SDM, DSD512");
+  harness.publisher.radioMetadataResolver = new RadioMetadataResolver({
+    enabled: true,
+    minLookupIntervalMs: 60_000
+  });
+
+  assert.equal(
+    harness.publisher.publishZone(
+      radioZone({
+        title: "04 Progressive Psy - DI.FM Premium",
+        artist: "E-Clip - Indian Spirit"
+      })
+    ),
+    true
+  );
+
+  assert.equal(harness.published[0].details, "Indian Spirit - E-Clip");
+  assert.equal(harness.published[0].state, "poly-sinc-gauss-hires-lp, SDM, DSD512");
 });
 
 test("external HQPlayer signal path overrides Roon metadata bottom line", () => {
