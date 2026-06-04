@@ -114,6 +114,28 @@ test("resolver applies cached radio artwork to radio presence", () => {
   assert.equal(presence.metadata.album, "Album Name");
   assert.equal(presence.metadata.albumArtUrl, "https://archive.org/whisper.jpg");
   assert.equal(presence.metadata.albumArtKey, `radio:${key}`);
+  assert.equal(presence.metadata.radioTrackKey, key);
+  assert.equal(presence.metadata.radioArtworkResolved, true);
+});
+
+test("resolver marks pending radio artwork as unresolved for the current track", () => {
+  const resolver = new RadioMetadataResolver({ enabled: true, minLookupIntervalMs: 60_000 });
+  const presence = {
+    timestampMode: "RADIO",
+    metadata: {
+      title: "Insomniac|MPACT - Sully - Eraser",
+      artist: "Insomniac Radio",
+      album: "Insomniac|MPACT",
+      albumArtUrl: "https://archive.org/old.jpg",
+      albumArtKey: "radio:old|track"
+    }
+  };
+
+  assert.equal(resolver.apply(presence), false);
+  assert.equal(presence.metadata.radioTrackKey, "sully|eraser");
+  assert.equal(presence.metadata.radioArtworkResolved, false);
+  assert.equal(resolver.queue.length, 1);
+  resolver.stop();
 });
 
 test("resolver does not run for local tracks", () => {
@@ -183,4 +205,3 @@ test("parses station-prefixed artist-title metadata", () => {
     { artist: "Sully", title: "Eraser" }
   );
 });
-

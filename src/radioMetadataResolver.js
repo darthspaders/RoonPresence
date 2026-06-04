@@ -27,7 +27,7 @@ function stripRadioNoise(value) {
 
 function splitArtistTitle(value) {
   const text = stripRadioNoise(value);
-  const separators = [" - ", " – ", " — "];
+  const separators = [" - ", " \u2013 ", " \u2014 "];
 
   for (const separator of separators) {
     if (!text.includes(separator)) continue;
@@ -139,6 +139,9 @@ class RadioMetadataResolver extends EventEmitter {
     if (!track) return false;
 
     const key = makeLookupKey(track);
+    presence.metadata.radioTrackKey = key;
+    presence.metadata.radioArtworkResolved = false;
+
     const cached = this.cache.get(key);
     if (cached?.status === "found") {
       this.applyResolvedMetadata(presence, cached.value);
@@ -155,6 +158,7 @@ class RadioMetadataResolver extends EventEmitter {
 
     presence.metadata.albumArtUrl = value.albumArtUrl;
     presence.metadata.albumArtKey = `radio:${value.key}`;
+    presence.metadata.radioArtworkResolved = true;
     if (value.album) presence.metadata.album = value.album;
   }
 
@@ -286,4 +290,3 @@ module.exports = {
   chooseCoverImage,
   chooseRelease
 };
-

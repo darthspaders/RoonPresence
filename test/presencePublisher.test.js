@@ -297,7 +297,65 @@ test("album art proxy URL is sent as Discord large image", () => {
   assert.equal(harness.publisher.publishZone(localZoneWithAlbumArt()), true);
 
   assert.equal(harness.published[0].largeImageKey, "https://roon-art.example.com/art/abc123.jpg");
-  assert.equal(harness.published[0].largeImageText, "Track - Artist");
+  assert.equal(harness.published[0].largeImageText, "Album");
+});
+
+test("radio album art does not add duplicate track text", () => {
+  const harness = createHarness();
+  harness.publisher.albumArtProvider = {
+    getPublicUrl: () => "https://roon-art.example.com/art/radio.jpg"
+  };
+
+  const activity = harness.publisher.toDiscordRpcActivity({
+    timestampMode: "RADIO",
+    activity: {
+      details: "Epic of Gilgamesh - Morttagua",
+      state: "poly-sinc-gauss-hires-lp, SDM, DSD512",
+      instance: false,
+      timestamps: { start: 2_000_000 }
+    },
+    metadata: {
+      title: "Epic of Gilgamesh",
+      artist: "Morttagua",
+      album: "Epic of Gilgamesh",
+      albumArtUrl: "https://archive.org/epic.jpg",
+      albumArtKey: "radio:morttagua|epic of gilgamesh",
+      radioTrackKey: "morttagua|epic of gilgamesh",
+      radioArtworkResolved: true
+    }
+  });
+
+  assert.equal(activity.largeImageKey, "https://roon-art.example.com/art/radio.jpg");
+  assert.equal("largeImageText" in activity, false);
+});
+
+test("stale resolved radio artwork is not sent for a different track", () => {
+  const harness = createHarness();
+  harness.publisher.albumArtProvider = {
+    getPublicUrl: () => "https://roon-art.example.com/art/old.jpg"
+  };
+
+  const activity = harness.publisher.toDiscordRpcActivity({
+    timestampMode: "RADIO",
+    activity: {
+      details: "Sully - Eraser",
+      state: "poly-sinc-gauss-hires-lp, SDM, DSD512",
+      instance: false,
+      timestamps: { start: 2_000_000 }
+    },
+    metadata: {
+      title: "Eraser",
+      artist: "Sully",
+      album: "Insomniac|MPACT",
+      albumArtUrl: "https://archive.org/old.jpg",
+      albumArtKey: "radio:morttagua|epic of gilgamesh",
+      radioTrackKey: "sully|eraser",
+      radioArtworkResolved: false
+    }
+  });
+
+  assert.equal("largeImageKey" in activity, false);
+  assert.equal("largeImageText" in activity, false);
 });
 
 test("republishLast refreshes Discord when only HQPlayer signal path changes", () => {

@@ -6,6 +6,14 @@ function roundTimestamp(value, nearestMs) {
   return Math.round(value / nearestMs) * nearestMs;
 }
 
+function cleanText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeText(value) {
+  return cleanText(value).toLowerCase();
+}
+
 class PresencePublisher {
   constructor({
     discord,
@@ -150,15 +158,37 @@ class PresencePublisher {
     const albumArtUrl = this.resolveAlbumArtUrl(presence);
     if (albumArtUrl) {
       rpcActivity.largeImageKey = albumArtUrl;
-      rpcActivity.largeImageText = `${presence.metadata.title} - ${presence.metadata.artist}`.slice(0, 128);
+      const largeImageText = this.createLargeImageText(presence);
+      if (largeImageText) rpcActivity.largeImageText = largeImageText;
     }
 
     return rpcActivity;
   }
 
+  createLargeImageText(presence) {
+    if (presence.timestampMode === "RADIO") return "";
+
+    const album = cleanText(presence.metadata?.album);
+    const title = normalizeText(presence.metadata?.title);
+    const artist = normalizeText(presence.metadata?.artist);
+    const albumKey = normalizeText(album);
+    if (!album || albumKey === title || albumKey === artist) return "";
+
+    return album.slice(0, 128);
+  }
+
   resolveAlbumArtUrl(presence) {
     const sourceUrl = presence.metadata?.albumArtUrl;
     if (!sourceUrl) return "";
+
+    if (
+      presence.timestampMode === "RADIO" &&
+      presence.metadata?.radioTrackKey &&
+      presence.metadata?.albumArtKey?.startsWith("radio:") &&
+      presence.metadata.albumArtKey !== `radio:${presence.metadata.radioTrackKey}`
+    ) {
+      return "";
+    }
 
     const publicUrl = this.albumArtProvider?.getPublicUrl?.(
       sourceUrl,
@@ -185,7 +215,9 @@ class PresencePublisher {
       timestampMode: presence.timestampMode,
       signalPath: presence.metadata.signalPath || "",
       albumArtKey: presence.metadata.albumArtKey || "",
-      albumArtUrl: presence.metadata.albumArtUrl || ""
+      albumArtUrl: presence.metadata.albumArtUrl || "",
+      radioTrackKey: presence.metadata.radioTrackKey || "",
+      radioArtworkResolved: !!presence.metadata.radioArtworkResolved
     };
   }
 
@@ -203,4 +235,3 @@ module.exports = {
   DEFAULT_MIN_PUBLISH_INTERVAL_MS,
   DEFAULT_START_ROUNDING_MS
 };
-
