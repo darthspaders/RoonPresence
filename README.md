@@ -12,14 +12,13 @@ Command-line MVP for publishing the active Roon HQPlayer zone to Discord Rich Pr
 git clone https://github.com/darthspaders/RoonPresence.git
 cd RoonPresence
 npm install
-Copy-Item .env.example .env
-notepad .env
+npm run setup
 npm start
 ```
 
 4. In Roon, go to **Settings > Extensions** and enable **RoonPresence**.
 
-This creates your personal `.env` config file. Set `DISCORD_CLIENT_ID` in `.env` before starting the app.
+The setup wizard creates your personal `.env` config file and prompts for the required Discord Client ID plus optional album art, Discogs, HQPlayer, and TIDAL settings.
 
 ## Known Good `.env`
 
@@ -51,6 +50,16 @@ RADIO_METADATA_MIN_LOOKUP_INTERVAL_MS=1500
 DISCOGS_LOOKUP=true
 DISCOGS_TOKEN=
 ```
+
+## Guided Setup
+
+Run the setup wizard any time you want to create or update `.env`:
+
+```powershell
+npm run setup
+```
+
+Existing values are shown in brackets. Press Enter to keep them.
 
 ## Run
 

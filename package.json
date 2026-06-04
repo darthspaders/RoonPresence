@@ -6,6 +6,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "node src/index.js",
+    "setup": "node scripts/setup.js",
     "test": "node --test"
   },
   "dependencies": {
@@ -18,3 +19,4 @@
     "node": ">=18"
   }
 }
+
