@@ -446,3 +446,56 @@ test("republishLast refreshes Discord when only HQPlayer signal path changes", (
   assert.equal(harness.published[0].state, "poly-sinc-gauss-hires-mp, TPDF, PCM, 192kHz");
   assert.equal(harness.published[1].state, "poly-sinc-gauss-hires-mp, TPDF, PCM, 768kHz");
 });
+
+test("adds TIDAL search button for local tracks", () => {
+  const harness = createHarness();
+  harness.publisher.updateConfig({
+    tidalButton: {
+      enabled: true,
+      label: "Play on TIDAL",
+      searchBaseUrl: "https://tidal.com/search?q="
+    }
+  });
+
+  assert.equal(harness.publisher.publishZone(localZone({ title: "Track Name", artist: "Artist Name" })), true);
+
+  assert.deepEqual(harness.published[0].buttons, [
+    {
+      label: "Play on TIDAL",
+      url: "https://tidal.com/search?q=Artist%20Name%20Track%20Name"
+    }
+  ]);
+});
+
+test("adds TIDAL search button for parsed radio tracks", () => {
+  const harness = createHarnessWithSignalPath("poly-sinc-gauss-hires-lp, SDM, DSD512");
+  harness.publisher.radioMetadataResolver = new RadioMetadataResolver({
+    enabled: true,
+    minLookupIntervalMs: 60_000
+  });
+  harness.publisher.updateConfig({
+    tidalButton: {
+      enabled: true,
+      label: "Play on TIDAL",
+      searchBaseUrl: "https://tidal.com/search?q="
+    }
+  });
+
+  assert.equal(
+    harness.publisher.publishZone(
+      radioZone({
+        title: "04 Progressive Psy - DI.FM Premium",
+        artist: "E-Clip - Indian Spirit"
+      })
+    ),
+    true
+  );
+
+  assert.deepEqual(harness.published[0].buttons, [
+    {
+      label: "Play on TIDAL",
+      url: "https://tidal.com/search?q=E-Clip%20Indian%20Spirit"
+    }
+  ]);
+});
+

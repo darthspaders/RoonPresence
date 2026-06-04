@@ -66,6 +66,11 @@ function configFromEnv(env) {
     },
     debugDiscordPayload: /^(1|true|yes)$/i.test(env.DEBUG_DISCORD_PAYLOAD || ""),
     memoryLogMs: Number(env.MEMORY_LOG_MS || 0),
+    tidalButton: {
+      enabled: !/^(0|false|no)$/i.test(env.TIDAL_BUTTON_ENABLED || "true"),
+      label: env.TIDAL_BUTTON_LABEL || "Play on TIDAL",
+      searchBaseUrl: env.TIDAL_SEARCH_BASE_URL || "https://tidal.com/search?q="
+    },
     albumArt: {
       publicBaseUrl: env.ALBUM_ART_PUBLIC_BASE_URL || "",
       proxyPort: Number(env.ALBUM_ART_PROXY_PORT || 8787),
@@ -90,3 +95,4 @@ function configFromEnv(env) {
 }
 
 module.exports = { loadDotEnv, readConfig, readConfigFresh, readDotEnvFile };
+

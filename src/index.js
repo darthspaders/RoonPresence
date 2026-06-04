@@ -59,6 +59,7 @@ function main() {
     albumArtProvider: albumArtProxy,
     radioMetadataResolver,
     defaultImageKey: config.discordDefaultImageKey,
+    tidalButton: config.tidalButton,
     debugPayload: config.debugDiscordPayload
   });
   const roon = new RoonClient({
@@ -131,7 +132,10 @@ function main() {
           discogsEnabled: freshConfig.radioMetadata.discogsEnabled,
           discogsToken: freshConfig.radioMetadata.discogsToken
         });
-        if (changed || albumArtChanged || radioMetadataChanged) {
+        const publisherChanged = publisher.updateConfig({
+          tidalButton: freshConfig.tidalButton
+        });
+        if (changed || albumArtChanged || radioMetadataChanged || publisherChanged) {
           logger.info("Reloaded settings from .env");
           health.update(
             "albumArt",

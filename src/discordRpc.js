@@ -140,6 +140,13 @@ class DiscordRpcClient extends EventEmitter {
       };
     }
 
+    if (Array.isArray(activity.buttons) && activity.buttons.length) {
+      wireActivity.buttons = activity.buttons
+        .filter((button) => button?.label && button?.url)
+        .slice(0, 2)
+        .map((button) => ({ label: button.label, url: button.url }));
+    }
+
     return wireActivity;
   }
 
@@ -164,3 +171,4 @@ class DiscordRpcClient extends EventEmitter {
 }
 
 module.exports = { DiscordRpcClient };
+

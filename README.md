@@ -39,6 +39,9 @@ ROON_DISPLAY_VERSION=0.1.0
 LOG_LEVEL=info
 DEBUG_DISCORD_PAYLOAD=false
 MEMORY_LOG_MS=300000
+TIDAL_BUTTON_ENABLED=true
+TIDAL_BUTTON_LABEL=Play on TIDAL
+TIDAL_SEARCH_BASE_URL=https://tidal.com/search?q=
 ALBUM_ART_PUBLIC_BASE_URL=https://art.darthspader.com
 ALBUM_ART_PROXY_PORT=8787
 ALBUM_ART_CACHE_MAX=40
@@ -68,6 +71,18 @@ INFO Using HQPlayer zone: HQPlayer
 INFO HQPlayer signal path: ...
 INFO Publishing Discord presence: ...
 ```
+
+## TIDAL Button
+
+RoonPresence can add a Discord button that opens a TIDAL search for the current artist and track:
+
+```env
+TIDAL_BUTTON_ENABLED=true
+TIDAL_BUTTON_LABEL=Play on TIDAL
+TIDAL_SEARCH_BASE_URL=https://tidal.com/search?q=
+```
+
+Set `TIDAL_BUTTON_ENABLED=false` if you do not want the button.
 
 ## Album Art
 
@@ -115,3 +130,4 @@ If memory grows unexpectedly, keep `MEMORY_LOG_MS=300000` and compare the period
 ```powershell
 npm test
 ```
+

@@ -14,10 +14,26 @@ function normalizeText(value) {
   return cleanText(value).toLowerCase();
 }
 
+function firstNonEmpty(...values) {
+  for (const value of values) {
+    const text = cleanText(value);
+    if (text) return text;
+  }
+  return "";
+}
+
 function formatTrackLine(title, artist) {
   const cleanTitle = cleanText(title);
   const cleanArtist = cleanText(artist);
   return (cleanArtist ? `${cleanTitle} - ${cleanArtist}` : cleanTitle).slice(0, 128);
+}
+
+function normalizeTidalButtonConfig(config = {}) {
+  return {
+    enabled: !!config.enabled,
+    label: cleanText(config.label || "Play on TIDAL").slice(0, 32),
+    searchBaseUrl: cleanText(config.searchBaseUrl || "https://tidal.com/search?q=")
+  };
 }
 
 class PresencePublisher {
@@ -29,6 +45,7 @@ class PresencePublisher {
     albumArtProvider,
     radioMetadataResolver,
     defaultImageKey = "",
+    tidalButton,
     clock = () => Date.now(),
     minPublishIntervalMs = DEFAULT_MIN_PUBLISH_INTERVAL_MS,
     startRoundingMs = DEFAULT_START_ROUNDING_MS,
@@ -41,6 +58,7 @@ class PresencePublisher {
     this.albumArtProvider = albumArtProvider;
     this.radioMetadataResolver = radioMetadataResolver;
     this.defaultImageKey = defaultImageKey;
+    this.tidalButton = normalizeTidalButtonConfig(tidalButton);
     this.clock = clock;
     this.minPublishIntervalMs = minPublishIntervalMs;
     this.startRoundingMs = startRoundingMs;
@@ -168,7 +186,30 @@ class PresencePublisher {
     if (largeImageKey) rpcActivity.largeImageKey = largeImageKey;
     if (largeImageText && largeImageKey) rpcActivity.largeImageText = largeImageText;
 
+    const buttons = this.createButtons(presence);
+    if (buttons.length) rpcActivity.buttons = buttons;
+
     return rpcActivity;
+  }
+
+  createButtons(presence) {
+    if (!this.tidalButton.enabled) return [];
+
+    const query = this.createTidalSearchQuery(presence);
+    if (!query || !this.tidalButton.searchBaseUrl) return [];
+
+    return [
+      {
+        label: this.tidalButton.label || "Play on TIDAL",
+        url: `${this.tidalButton.searchBaseUrl}${encodeURIComponent(query)}`
+      }
+    ];
+  }
+
+  createTidalSearchQuery(presence) {
+    const title = cleanText(presence.metadata?.title || presence.activity?.details);
+    const artist = cleanText(presence.metadata?.artist);
+    return firstNonEmpty(artist ? `${artist} ${title}` : title, title);
   }
 
   createLargeImageText(presence) {
@@ -229,8 +270,23 @@ class PresencePublisher {
       albumArtUrl: presence.metadata.albumArtUrl || "",
       radioTrackKey: presence.metadata.radioTrackKey || "",
       radioArtworkResolved: !!presence.metadata.radioArtworkResolved,
-      defaultImageKey: this.defaultImageKey || ""
+      defaultImageKey: this.defaultImageKey || "",
+      tidalButtonEnabled: !!this.tidalButton.enabled,
+      tidalButtonLabel: this.tidalButton.label || "",
+      tidalSearchQuery: this.createTidalSearchQuery(presence)
     };
+  }
+
+  updateConfig({ tidalButton } = {}) {
+    if (tidalButton === undefined) return false;
+
+    const nextTidalButton = normalizeTidalButtonConfig(tidalButton);
+    if (JSON.stringify(nextTidalButton) === JSON.stringify(this.tidalButton)) return false;
+
+    this.tidalButton = nextTidalButton;
+    this.lastPublishedSignature = "";
+    this.lastPublishedIdentitySignature = "";
+    return true;
   }
 
   logUnchangedSkip() {
@@ -247,3 +303,4 @@ module.exports = {
   DEFAULT_MIN_PUBLISH_INTERVAL_MS,
   DEFAULT_START_ROUNDING_MS
 };
+

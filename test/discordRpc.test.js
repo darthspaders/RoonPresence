@@ -164,3 +164,28 @@ test("discord adapter maps large image fields to RPC assets", () => {
     large_text: "Track - Artist"
   });
 });
+
+test("discord adapter maps buttons to RPC activity", () => {
+  const client = new DiscordRpcClient({
+    clientId: "123",
+    logger: {
+      info() {},
+      warn() {}
+    }
+  });
+
+  const wireActivity = client.toRpcWireActivity({
+    type: 2,
+    details: "Track",
+    state: "Artist",
+    instance: false,
+    buttons: [
+      { label: "Play on TIDAL", url: "https://tidal.com/search?q=Artist%20Track" }
+    ]
+  });
+
+  assert.deepEqual(wireActivity.buttons, [
+    { label: "Play on TIDAL", url: "https://tidal.com/search?q=Artist%20Track" }
+  ]);
+});
+
