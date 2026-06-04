@@ -13,10 +13,23 @@ function isUsablePublicBaseUrl(value) {
   return /^https?:\/\//i.test(String(value || ""));
 }
 
-function fetchBuffer(url, timeoutMs = 10_000) {
+function fetchBuffer(url, timeoutMs = 10_000, redirectsRemaining = 5) {
   return new Promise((resolve, reject) => {
     const client = /^https:/i.test(url) ? https : http;
     const request = client.get(url, (response) => {
+      if ([301, 302, 303, 307, 308].includes(response.statusCode)) {
+        response.resume();
+        const location = response.headers.location;
+        if (!location || redirectsRemaining <= 0) {
+          reject(new Error(`Image request failed with HTTP ${response.statusCode}`));
+          return;
+        }
+
+        const nextUrl = new URL(location, url).toString();
+        fetchBuffer(nextUrl, timeoutMs, redirectsRemaining - 1).then(resolve, reject);
+        return;
+      }
+
       if (response.statusCode < 200 || response.statusCode >= 300) {
         response.resume();
         reject(new Error(`Image request failed with HTTP ${response.statusCode}`));
@@ -170,5 +183,7 @@ module.exports = {
   AlbumArtProxy,
   DEFAULT_ALBUM_ART_PROXY_PORT,
   DEFAULT_ALBUM_ART_CACHE_MAX,
-  isUsablePublicBaseUrl
+  isUsablePublicBaseUrl,
+  fetchBuffer
 };
+

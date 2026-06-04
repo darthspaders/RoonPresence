@@ -1,6 +1,7 @@
+const http = require("node:http");
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { AlbumArtProxy, isUsablePublicBaseUrl } = require("../src/albumArtProxy");
+const { AlbumArtProxy, fetchBuffer, isUsablePublicBaseUrl } = require("../src/albumArtProxy");
 
 test("album art proxy requires a public base URL", () => {
   assert.equal(isUsablePublicBaseUrl(""), false);
@@ -54,3 +55,25 @@ test("album art proxy reloads public URL config", () => {
   );
   proxy.stop();
 });
+test("album art fetch follows HTTP redirects", async () => {
+  const server = http.createServer((request, response) => {
+    if (request.url === "/redirect") {
+      response.writeHead(307, { location: "/image" });
+      response.end();
+      return;
+    }
+
+    response.writeHead(200, { "content-type": "image/jpeg" });
+    response.end("image-bytes");
+  });
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = server.address();
+    const buffer = await fetchBuffer(`http://127.0.0.1:${port}/redirect`);
+    assert.equal(buffer.toString("utf8"), "image-bytes");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
