@@ -181,13 +181,12 @@ class PresencePublisher {
     const sourceUrl = presence.metadata?.albumArtUrl;
     if (!sourceUrl) return "";
 
-    if (
-      presence.timestampMode === "RADIO" &&
-      presence.metadata?.radioTrackKey &&
-      presence.metadata?.albumArtKey?.startsWith("radio:") &&
-      presence.metadata.albumArtKey !== `radio:${presence.metadata.radioTrackKey}`
-    ) {
-      return "";
+    if (presence.timestampMode === "RADIO") {
+      const albumArtKey = presence.metadata?.albumArtKey || "";
+      const radioTrackKey = presence.metadata?.radioTrackKey || "";
+      if (!albumArtKey.startsWith("radio:") || albumArtKey !== `radio:${radioTrackKey}`) {
+        return "";
+      }
     }
 
     const publicUrl = this.albumArtProvider?.getPublicUrl?.(

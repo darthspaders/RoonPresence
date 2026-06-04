@@ -358,6 +358,35 @@ test("stale resolved radio artwork is not sent for a different track", () => {
   assert.equal("largeImageText" in activity, false);
 });
 
+test("unresolved radio station artwork falls back to Discord app artwork", () => {
+  const harness = createHarness();
+  harness.publisher.albumArtProvider = {
+    getPublicUrl: () => "https://roon-art.example.com/art/station.jpg"
+  };
+
+  const activity = harness.publisher.toDiscordRpcActivity({
+    timestampMode: "RADIO",
+    activity: {
+      details: "Insomniac|MPACT - New Track",
+      state: "poly-sinc-gauss-hires-lp, SDM, DSD512",
+      instance: false,
+      timestamps: { start: 2_000_000 }
+    },
+    metadata: {
+      title: "New Track",
+      artist: "Insomniac|MPACT",
+      album: "Insomniac Radio",
+      albumArtUrl: "http://127.0.0.1:9100/api/image/station?scale=fill",
+      albumArtKey: "station",
+      radioTrackKey: "insomniac|mpact|new track",
+      radioArtworkResolved: false
+    }
+  });
+
+  assert.equal("largeImageKey" in activity, false);
+  assert.equal("largeImageText" in activity, false);
+});
+
 test("republishLast refreshes Discord when only HQPlayer signal path changes", () => {
   const harness = createMutableSignalHarness("poly-sinc-gauss-hires-mp, TPDF, PCM, 192kHz");
 

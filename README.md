@@ -83,7 +83,7 @@ When this is not set, the app logs that album art was found but does not send th
 
 For radio streams that only provide station artwork, RoonPresence can look up track artwork from MusicBrainz and Cover Art Archive using the live artist/title text from Roon. Results are cached in memory and lookups are rate-limited by `RADIO_METADATA_MIN_LOOKUP_INTERVAL_MS`.
 
-If lookup fails or the stream only reports station text, RoonPresence keeps the station artwork fallback.
+If lookup fails or the stream only reports station text, RoonPresence omits the station image so Discord falls back to the app artwork instead of showing stale radio art.
 
 ## Stability Checks
 
@@ -112,4 +112,3 @@ If memory grows unexpectedly, keep `MEMORY_LOG_MS=300000` and compare the period
 ```powershell
 npm test
 ```
-
