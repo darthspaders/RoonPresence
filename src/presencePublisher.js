@@ -13,6 +13,7 @@ class PresencePublisher {
     logger,
     signalPathProvider,
     albumArtProvider,
+    radioMetadataResolver,
     clock = () => Date.now(),
     minPublishIntervalMs = DEFAULT_MIN_PUBLISH_INTERVAL_MS,
     startRoundingMs = DEFAULT_START_ROUNDING_MS,
@@ -23,6 +24,7 @@ class PresencePublisher {
     this.logger = logger;
     this.signalPathProvider = signalPathProvider;
     this.albumArtProvider = albumArtProvider;
+    this.radioMetadataResolver = radioMetadataResolver;
     this.clock = clock;
     this.minPublishIntervalMs = minPublishIntervalMs;
     this.startRoundingMs = startRoundingMs;
@@ -40,6 +42,7 @@ class PresencePublisher {
     const presence = this.mapper.mapPresence(zone);
     if (!presence) return false;
     this.applyExternalSignalPath(presence);
+    this.radioMetadataResolver?.apply?.(presence);
 
     const signature = this.createSignature(presence);
     const identitySignature = this.createIdentitySignature(presence);
@@ -200,3 +203,4 @@ module.exports = {
   DEFAULT_MIN_PUBLISH_INTERVAL_MS,
   DEFAULT_START_ROUNDING_MS
 };
+

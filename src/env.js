@@ -70,6 +70,11 @@ function configFromEnv(env) {
       proxyPort: Number(env.ALBUM_ART_PROXY_PORT || 8787),
       cacheMax: Number(env.ALBUM_ART_CACHE_MAX || 40)
     },
+    radioMetadata: {
+      enabled: !/^(0|false|no)$/i.test(env.RADIO_METADATA_LOOKUP || "true"),
+      cacheMax: Number(env.RADIO_METADATA_CACHE_MAX || 200),
+      minLookupIntervalMs: Number(env.RADIO_METADATA_MIN_LOOKUP_INTERVAL_MS || 1500)
+    },
     roon: {
       extension_id: env.ROON_EXTENSION_ID || "com.example.roon-discord-cli",
       display_name: env.ROON_DISPLAY_NAME || "RoonPresence",
@@ -82,3 +87,4 @@ function configFromEnv(env) {
 }
 
 module.exports = { loadDotEnv, readConfig, readConfigFresh, readDotEnvFile };
+

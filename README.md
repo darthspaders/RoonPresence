@@ -41,6 +41,9 @@ MEMORY_LOG_MS=300000
 ALBUM_ART_PUBLIC_BASE_URL=https://art.darthspader.com
 ALBUM_ART_PROXY_PORT=8787
 ALBUM_ART_CACHE_MAX=40
+RADIO_METADATA_LOOKUP=true
+RADIO_METADATA_CACHE_MAX=200
+RADIO_METADATA_MIN_LOOKUP_INTERVAL_MS=1500
 ```
 
 ## Run
@@ -76,6 +79,12 @@ ALBUM_ART_PROXY_PORT=8787
 
 When this is not set, the app logs that album art was found but does not send the private Roon URL to Discord.
 
+## Radio Metadata
+
+For radio streams that only provide station artwork, RoonPresence can look up track artwork from MusicBrainz and Cover Art Archive using the live artist/title text from Roon. Results are cached in memory and lookups are rate-limited by `RADIO_METADATA_MIN_LOOKUP_INTERVAL_MS`.
+
+If lookup fails or the stream only reports station text, RoonPresence keeps the station artwork fallback.
+
 ## Stability Checks
 
 Use this quick pass after changes:
@@ -103,8 +112,4 @@ If memory grows unexpectedly, keep `MEMORY_LOG_MS=300000` and compare the period
 ```powershell
 npm test
 ```
-
-
-
-
 

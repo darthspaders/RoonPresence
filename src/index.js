@@ -10,6 +10,7 @@ const { HQPlayerStatusProvider } = require("./hqplayerStatus");
 const { createMemoryMonitor } = require("./memoryMonitor");
 const { AlbumArtProxy } = require("./albumArtProxy");
 const { HealthStatus } = require("./healthStatus");
+const { RadioMetadataResolver } = require("./radioMetadataResolver");
 
 function main() {
   const config = readConfig();
@@ -42,12 +43,19 @@ function main() {
     cacheMax: config.albumArt.cacheMax,
     logger
   });
+  const radioMetadataResolver = new RadioMetadataResolver({
+    enabled: config.radioMetadata.enabled,
+    cacheMax: config.radioMetadata.cacheMax,
+    minLookupIntervalMs: config.radioMetadata.minLookupIntervalMs,
+    logger
+  });
   const publisher = new PresencePublisher({
     discord,
     mapper,
     logger,
     signalPathProvider: hqplayerStatus,
     albumArtProvider: albumArtProxy,
+    radioMetadataResolver,
     debugPayload: config.debugDiscordPayload
   });
   const roon = new RoonClient({
@@ -88,6 +96,11 @@ function main() {
     health.update("discord", "disconnected");
   });
 
+  radioMetadataResolver.on("metadataResolved", () => {
+    logger.info("Radio metadata resolved; refreshing Discord presence");
+    publisher.republishLast();
+  });
+
   const envPath = path.resolve(process.cwd(), ".env");
   let envReloadTimer = null;
   if (fs.existsSync(envPath)) {
@@ -108,7 +121,12 @@ function main() {
           port: freshConfig.albumArt.proxyPort,
           cacheMax: freshConfig.albumArt.cacheMax
         });
-        if (changed || albumArtChanged) {
+        const radioMetadataChanged = radioMetadataResolver.updateConfig({
+          enabled: freshConfig.radioMetadata.enabled,
+          cacheMax: freshConfig.radioMetadata.cacheMax,
+          minLookupIntervalMs: freshConfig.radioMetadata.minLookupIntervalMs
+        });
+        if (changed || albumArtChanged || radioMetadataChanged) {
           logger.info("Reloaded settings from .env");
           health.update(
             "albumArt",
@@ -139,6 +157,7 @@ function main() {
     memoryMonitor.stop();
     hqplayerStatus.stop();
     albumArtProxy.stop();
+    radioMetadataResolver.stop();
     publisher.clear();
     discord.stop();
     setTimeout(() => process.exit(0), 250);
@@ -157,3 +176,4 @@ function main() {
 }
 
 main();
+
