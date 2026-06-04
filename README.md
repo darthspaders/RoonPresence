@@ -84,6 +84,8 @@ TIDAL_SEARCH_BASE_URL=https://tidal.com/search?q=
 
 Set `TIDAL_BUTTON_ENABLED=false` if you do not want the button.
 
+Discord only shows Rich Presence buttons to other users viewing your profile; you will not see your own TIDAL button on your own activity card.
+
 ## Album Art
 
 Roon album art lives on your local network, and Discord cannot load that private URL directly.

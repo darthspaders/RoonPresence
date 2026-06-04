@@ -384,3 +384,37 @@ test("parses station-prefixed artist-title metadata", () => {
     { artist: "Sully", title: "Eraser" }
   );
 });
+
+test("Discogs result rejects same title from wrong artist", () => {
+  assert.equal(
+    chooseDiscogsResult(
+      {
+        results: [
+          {
+            title: "DJ Different - Tides Of Time",
+            cover_image: "https://img.discogs.com/wrong.jpg"
+          }
+        ]
+      },
+      { artist: "Pedro Aviles", title: "Tides Of Time" }
+    ),
+    null
+  );
+});
+
+test("Discogs result accepts matching artist and title", () => {
+  assert.deepEqual(
+    chooseDiscogsResult(
+      {
+        results: [
+          {
+            title: "Pedro Aviles - Tides Of Time",
+            cover_image: "https://img.discogs.com/right.jpg"
+          }
+        ]
+      },
+      { artist: "Pedro Aviles", title: "Tides Of Time" }
+    ),
+    { title: "Pedro Aviles - Tides Of Time", coverImage: "https://img.discogs.com/right.jpg" }
+  );
+});

@@ -156,9 +156,31 @@ function isUsableDiscogsImage(value) {
   return !!url && !/spacer\.gif/i.test(url);
 }
 
-function chooseDiscogsResult(searchJson) {
+function normalizeDiscogsMatchText(value) {
+  return cleanText(value)
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function isDiscogsTrackMatch(result, track = {}) {
+  const resultTitle = normalizeDiscogsMatchText(result?.title);
+  const trackTitle = normalizeDiscogsMatchText(track.title);
+  const trackArtist = normalizeDiscogsMatchText(track.artist);
+
+  if (!resultTitle) return false;
+  if (trackTitle && !resultTitle.includes(trackTitle)) return false;
+  if (trackArtist && !resultTitle.includes(trackArtist)) return false;
+  return true;
+}
+
+function chooseDiscogsResult(searchJson, track = {}) {
   const results = Array.isArray(searchJson?.results) ? searchJson.results : [];
-  const result = results.find((entry) => isUsableDiscogsImage(entry?.cover_image));
+  const usableResults = results.filter((entry) => isUsableDiscogsImage(entry?.cover_image));
+  const result = usableResults.find((entry) => isDiscogsTrackMatch(entry, track)) ||
+    (!track.title && !track.artist ? usableResults[0] : null);
   if (!result) return null;
 
   return {
@@ -343,7 +365,7 @@ class RadioMetadataResolver extends EventEmitter {
           authorization: `Discogs token=${this.discogsToken}`
         }
       });
-      const result = chooseDiscogsResult(searchJson);
+      const result = chooseDiscogsResult(searchJson, track);
       if (!result) continue;
 
       return {
