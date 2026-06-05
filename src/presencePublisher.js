@@ -25,7 +25,7 @@ function firstNonEmpty(...values) {
 function formatTrackLine(title, artist) {
   const cleanTitle = cleanText(title);
   const cleanArtist = cleanText(artist);
-  return (cleanArtist ? `${cleanTitle} - ${cleanArtist}` : cleanTitle).slice(0, 128);
+  return (cleanArtist ? `${cleanArtist} - ${cleanTitle}` : cleanTitle).slice(0, 128);
 }
 
 function normalizeTidalButtonConfig(config = {}) {
@@ -306,4 +306,5 @@ module.exports = {
   DEFAULT_MIN_PUBLISH_INTERVAL_MS,
   DEFAULT_START_ROUNDING_MS
 };
+
 

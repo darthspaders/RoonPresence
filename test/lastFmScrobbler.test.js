@@ -78,3 +78,23 @@ test("scrobbler ignores title-only radio mixes", () => {
   assert.equal(scrobbler.maybeScrobble(radioPresence({ artist: "", title: "DI.FM Top 10", key: "|di.fm top 10" })), false);
 });
 
+
+test("scrobbler reports Last.fm JSON errors", async () => {
+  const scrobbler = new LastFmScrobbler({
+    enabled: true,
+    apiKey: "api-key",
+    apiSecret: "secret",
+    sessionKey: "session",
+    fetchImpl: async () => ({
+      ok: false,
+      status: 403,
+      json: async () => ({ error: 9, message: "Invalid session key" })
+    })
+  });
+
+  await assert.rejects(
+    () => scrobbler.scrobble({ artist: "Sunflare", title: "Lotus" }, 1780000123),
+    /9: Invalid session key/
+  );
+});
+

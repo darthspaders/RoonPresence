@@ -300,7 +300,7 @@ test("radio metadata resolver updates title before signal path", () => {
     true
   );
 
-  assert.equal(harness.published[0].details, "Indian Spirit - E-Clip");
+  assert.equal(harness.published[0].details, "E-Clip - Indian Spirit");
   assert.equal(harness.published[0].state, "poly-sinc-gauss-hires-lp, SDM, DSD512");
 });
 
@@ -310,7 +310,7 @@ test("external HQPlayer signal path overrides Roon metadata bottom line", () => 
   assert.equal(harness.publisher.publishZone(localZone()), true);
 
   assert.equal(harness.published.length, 1);
-  assert.equal(harness.published[0].details, "Track - Artist");
+  assert.equal(harness.published[0].details, "Artist - Track");
   assert.equal(harness.published[0].state, "poly-sinc-gauss-hires-mp, TPDF, PCM, 768kHz");
 });
 
@@ -498,4 +498,5 @@ test("adds TIDAL search button for parsed radio tracks", () => {
     }
   ]);
 });
+
 

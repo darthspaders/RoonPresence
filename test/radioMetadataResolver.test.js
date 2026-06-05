@@ -72,6 +72,16 @@ test("combines split station title, track, and artist fields", () => {
     { artist: "Ultraverse", title: "Covenant (Original Mix)" }
   );
 });
+test("parses multi-artist DI.FM subtitle artist first", () => {
+  assert.deepEqual(
+    parseRadioTrack({
+      title: "Progressive -DI.FM",
+      artist: "Ivan Berkowitz, Messier - Fountain (Ivan Berkowitz Remix)",
+      album: "Progressive -DI.FM"
+    }),
+    { artist: "Ivan Berkowitz, Messier", title: "Fountain (Ivan Berkowitz Remix)" }
+  );
+});
 
 test("fills missing artist from separate field when title has station prefix", () => {
   assert.deepEqual(
@@ -388,8 +398,8 @@ test("resolver applies parsed radio track text before artwork resolves", () => {
   assert.equal(resolver.apply(presence), false);
   assert.equal(presence.metadata.title, "Indian Spirit");
   assert.equal(presence.metadata.artist, "E-Clip");
-  assert.equal(presence.activity.details, "Indian Spirit");
-  assert.equal(presence.activity.state, "E-Clip");
+  assert.equal(presence.activity.details, "E-Clip - Indian Spirit");
+  assert.equal(presence.activity.state, "04 Progressive Psy - DI.FM Premium");
   resolver.stop();
 });
 
@@ -495,4 +505,7 @@ test("Discogs result accepts matching artist and title", () => {
     { title: "Pedro Aviles - Tides Of Time", coverImage: "https://img.discogs.com/right.jpg" }
   );
 });
+
+
+
 

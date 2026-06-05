@@ -74,6 +74,7 @@ class LastFmScrobbler {
 
     this.scrobbledKeys.add(key);
     const unixTimestamp = Math.max(1, Math.floor(this.clock() / 1000));
+    this.logger?.info?.(`Scrobbling radio track to Last.fm: ${track.artist} - ${track.title}`);
 
     this.scrobble(track, unixTimestamp).catch((error) => {
       this.logger?.warn?.("Last.fm radio scrobble failed", { error: error.message });
@@ -106,9 +107,17 @@ class LastFmScrobbler {
       body
     });
 
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const json = await response.json();
-    if (json?.error) throw new Error(`${json.error}: ${json.message || "Last.fm error"}`);
+    let json;
+    try {
+      json = await response.json();
+    } catch {
+      json = null;
+    }
+
+    if (!response.ok || json?.error) {
+      const lastFmMessage = json?.message ? `${json.error || response.status}: ${json.message}` : `HTTP ${response.status}`;
+      throw new Error(lastFmMessage);
+    }
 
     const accepted = Number(json?.scrobbles?.["@attr"]?.accepted ?? 0);
     const ignored = Number(json?.scrobbles?.["@attr"]?.ignored ?? 0);
@@ -147,4 +156,6 @@ module.exports = {
   hasFullRadioTrack,
   makeScrobbleKey
 };
+
+
 

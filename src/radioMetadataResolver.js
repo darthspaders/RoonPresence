@@ -319,8 +319,10 @@ class RadioMetadataResolver extends EventEmitter {
 
     if (presence.metadata.signalPath || !presence.activity) return;
 
-    if (track.title) presence.activity.details = track.title.slice(0, 128);
-    presence.activity.state = (track.artist || presence.metadata.radioStationName || "").slice(0, 128);
+    if (track.title) {
+      presence.activity.details = (track.artist ? track.artist + " - " + track.title : track.title).slice(0, 128);
+    }
+    presence.activity.state = (presence.metadata.radioStationName || track.artist || "").slice(0, 128);
   }
 
   applyResolvedMetadata(presence, value) {
@@ -413,7 +415,7 @@ class RadioMetadataResolver extends EventEmitter {
     try {
       return await this.searchTidal(track, key);
     } catch (error) {
-      this.logger?.debug?.("TIDAL artwork lookup failed", { error: error.message });
+      this.logger?.warn?.("TIDAL artwork lookup failed", { error: error.message });
       return null;
     }
   }
@@ -436,6 +438,7 @@ class RadioMetadataResolver extends EventEmitter {
       const result = chooseTidalTrack(searchJson, track);
       if (!result) continue;
 
+      this.logger?.info?.("Resolved TIDAL artwork: " + (track.artist ? track.artist + " - " : "") + track.title);
       return {
         key,
         title: track.title,
@@ -446,8 +449,10 @@ class RadioMetadataResolver extends EventEmitter {
       };
     }
 
+    this.logger?.info?.("TIDAL artwork not found: " + (track.artist ? track.artist + " - " : "") + track.title);
     return null;
   }
+
   async lookupDiscogs(track, key) {
     if (!this.discogsEnabled || !this.discogsToken) return null;
 
@@ -575,4 +580,5 @@ module.exports = {
   tidalCoverUrlFromUuid,
   getRadioStationName
 };
+
 
