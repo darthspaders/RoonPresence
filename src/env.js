@@ -71,6 +71,11 @@ function configFromEnv(env) {
       label: env.TIDAL_BUTTON_LABEL || "Play on TIDAL",
       searchBaseUrl: env.TIDAL_SEARCH_BASE_URL || "https://tidal.com/search?q="
     },
+    tidalArtwork: {
+      enabled: !/^(0|false|no)$/i.test(env.TIDAL_ARTWORK_LOOKUP || "true"),
+      countryCode: env.TIDAL_COUNTRY_CODE || "US",
+      accessToken: env.TIDAL_ACCESS_TOKEN || ""
+    },
     albumArt: {
       publicBaseUrl: env.ALBUM_ART_PUBLIC_BASE_URL || "",
       proxyPort: Number(env.ALBUM_ART_PROXY_PORT || 8787),
@@ -80,8 +85,17 @@ function configFromEnv(env) {
       enabled: !/^(0|false|no)$/i.test(env.RADIO_METADATA_LOOKUP || "true"),
       cacheMax: Number(env.RADIO_METADATA_CACHE_MAX || 200),
       minLookupIntervalMs: Number(env.RADIO_METADATA_MIN_LOOKUP_INTERVAL_MS || 1500),
+      tidalArtworkEnabled: !/^(0|false|no)$/i.test(env.TIDAL_ARTWORK_LOOKUP || "true"),
+      tidalCountryCode: env.TIDAL_COUNTRY_CODE || "US",
+      tidalAccessToken: env.TIDAL_ACCESS_TOKEN || "",
       discogsEnabled: !/^(0|false|no)$/i.test(env.DISCOGS_LOOKUP || "true"),
       discogsToken: env.DISCOGS_TOKEN || ""
+    },
+    lastFm: {
+      enabled: /^(1|true|yes)$/i.test(env.LASTFM_SCROBBLE_RADIO || ""),
+      apiKey: env.LASTFM_API_KEY || "",
+      apiSecret: env.LASTFM_API_SECRET || "",
+      sessionKey: env.LASTFM_SESSION_KEY || ""
     },
     roon: {
       extension_id: env.ROON_EXTENSION_ID || "com.example.roon-discord-cli",

@@ -4,6 +4,8 @@ const {
   RadioMetadataResolver,
   chooseCoverImage,
   chooseDiscogsResult,
+  chooseTidalTrack,
+  tidalCoverUrlFromUuid,
   getRadioStationName,
   makeLookupKey,
   parseRadioTrack
@@ -100,10 +102,49 @@ test("chooses front cover image thumbnail", () => {
     "https://archive.org/cover-500.jpg"
   );
 });
+test("resolver prefers TIDAL artwork before Discogs", async () => {
+  const requested = [];
+  const resolver = new RadioMetadataResolver({
+    discogsToken: "secret-token",
+    fetchJson: async (url) => {
+      requested.push(url);
+      assert.equal(url.startsWith("https://api.tidal.com/v1/search/tracks"), true);
+      return {
+        items: [
+          {
+            title: "Indian Spirit",
+            artists: [{ name: "E-Clip" }],
+            album: {
+              title: "Indian Spirit",
+              cover: "12345678-abcd-4321-9000-123456789abc"
+            }
+          }
+        ]
+      };
+    }
+  });
+
+  const result = await resolver.lookup(
+    { artist: "E-Clip", title: "Indian Spirit" },
+    "e-clip|indian spirit"
+  );
+
+  assert.equal(result.source, "tidal");
+  assert.equal(result.albumArtUrl, "https://resources.tidal.com/images/12345678/abcd/4321/9000/123456789abc/640x640.jpg");
+  assert.equal(requested.length, 1);
+});
+
+test("formats TIDAL cover UUIDs", () => {
+  assert.equal(
+    tidalCoverUrlFromUuid("12345678-abcd-4321-9000-123456789abc"),
+    "https://resources.tidal.com/images/12345678/abcd/4321/9000/123456789abc/640x640.jpg"
+  );
+});
 
 test("resolver prefers Discogs artwork when token is configured", async () => {
   const requested = [];
   const resolver = new RadioMetadataResolver({
+    tidalArtworkEnabled: false,
     discogsToken: "secret-token",
     fetchJson: async (url, options = {}) => {
       requested.push({ url, options });
@@ -134,6 +175,7 @@ test("resolver prefers Discogs artwork when token is configured", async () => {
 test("Discogs miss falls back to MusicBrainz artwork", async () => {
   const requested = [];
   const resolver = new RadioMetadataResolver({
+    tidalArtworkEnabled: false,
     discogsToken: "secret-token",
     fetchJson: async (url) => {
       requested.push(url);
@@ -178,6 +220,7 @@ test("Discogs miss falls back to MusicBrainz artwork", async () => {
 test("resolver looks up MusicBrainz and Cover Art Archive metadata", async () => {
   const requested = [];
   const resolver = new RadioMetadataResolver({
+    tidalArtworkEnabled: false,
     fetchJson: async (url) => {
       requested.push(url);
       if (url.includes("musicbrainz.org")) {
@@ -340,6 +383,7 @@ test("parses station-prefixed title as title-only lookup", () => {
 test("resolver falls back to title-only MusicBrainz lookup", async () => {
   const requested = [];
   const resolver = new RadioMetadataResolver({
+    tidalArtworkEnabled: false,
     fetchJson: async (url) => {
       requested.push(url);
       if (url.includes("musicbrainz.org")) {
@@ -418,3 +462,4 @@ test("Discogs result accepts matching artist and title", () => {
     { title: "Pedro Aviles - Tides Of Time", coverImage: "https://img.discogs.com/right.jpg" }
   );
 });
+

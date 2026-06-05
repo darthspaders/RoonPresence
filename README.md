@@ -81,6 +81,9 @@ MEMORY_LOG_MS=300000
 TIDAL_BUTTON_ENABLED=true
 TIDAL_BUTTON_LABEL=Play on TIDAL
 TIDAL_SEARCH_BASE_URL=https://tidal.com/search?q=
+TIDAL_ARTWORK_LOOKUP=true
+TIDAL_COUNTRY_CODE=US
+TIDAL_ACCESS_TOKEN=
 ALBUM_ART_PUBLIC_BASE_URL=https://art.darthspader.com
 ALBUM_ART_PROXY_PORT=8787
 ALBUM_ART_CACHE_MAX=40
@@ -89,6 +92,10 @@ RADIO_METADATA_CACHE_MAX=200
 RADIO_METADATA_MIN_LOOKUP_INTERVAL_MS=1500
 DISCOGS_LOOKUP=true
 DISCOGS_TOKEN=
+LASTFM_SCROBBLE_RADIO=false
+LASTFM_API_KEY=
+LASTFM_API_SECRET=
+LASTFM_SESSION_KEY=
 ```
 
 ## Guided Setup
@@ -167,6 +174,18 @@ Set `TIDAL_BUTTON_ENABLED=false` if you do not want the button.
 
 Discord only shows Rich Presence buttons to other users viewing your profile; you will not see your own TIDAL button on your own activity card.
 
+## TIDAL Artwork
+
+For live radio metadata, RoonPresence tries TIDAL artwork first, then Discogs, then MusicBrainz/Cover Art Archive. The TIDAL image URL is still sent through the album-art proxy before Discord receives it.
+
+```env
+TIDAL_ARTWORK_LOOKUP=true
+TIDAL_COUNTRY_CODE=US
+TIDAL_ACCESS_TOKEN=
+```
+
+`TIDAL_ACCESS_TOKEN` is optional. If TIDAL blocks unauthenticated lookup, paste a valid TIDAL access token there.
+
 ## Album Art
 
 Roon album art lives on your local network, and Discord cannot load that private URL directly.
@@ -182,9 +201,22 @@ When this is not set, the app logs that album art was found but does not send th
 
 ## Radio Metadata
 
-For radio streams that only provide station artwork, RoonPresence can look up track artwork using the live artist/title text from Roon. Discogs is tried first when `DISCOGS_TOKEN` is set, then MusicBrainz and Cover Art Archive are used as fallback. Results are cached in memory and lookups are rate-limited by `RADIO_METADATA_MIN_LOOKUP_INTERVAL_MS`.
+For radio streams that only provide station artwork, RoonPresence can look up track artwork using the live artist/title text from Roon. TIDAL is tried first, Discogs is tried next when `DISCOGS_TOKEN` is set, then MusicBrainz and Cover Art Archive are used as fallback. Results are cached in memory and lookups are rate-limited by `RADIO_METADATA_MIN_LOOKUP_INTERVAL_MS`.
 
 If lookup fails or the stream only reports station text, RoonPresence uses `DISCORD_DEFAULT_IMAGE_KEY` so Discord shows the app artwork and can still display the station name as image text.
+
+## Last.fm Radio Scrobbling
+
+RoonPresence can scrobble radio tracks to Last.fm, but only when the radio metadata can be parsed into both artist and track title. Title-only radio mixes, station-only text, and local library tracks are not scrobbled.
+
+```env
+LASTFM_SCROBBLE_RADIO=true
+LASTFM_API_KEY=your_lastfm_api_key
+LASTFM_API_SECRET=your_lastfm_shared_secret
+LASTFM_SESSION_KEY=your_lastfm_session_key
+```
+
+Last.fm `track.scrobble` requires an API key, shared secret, and authenticated session key: https://www.last.fm/api/show/track.scrobble
 
 ## Stability Checks
 

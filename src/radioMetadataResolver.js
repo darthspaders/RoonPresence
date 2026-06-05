@@ -188,6 +188,54 @@ function chooseDiscogsResult(searchJson, track = {}) {
     coverImage: cleanText(result.cover_image)
   };
 }
+function tidalCoverUrlFromUuid(uuid, size = 640) {
+  const cleanUuid = cleanText(uuid);
+  if (!cleanUuid) return "";
+  return `https://resources.tidal.com/images/${cleanUuid.replace(/-/g, "/")}/${size}x${size}.jpg`;
+}
+
+function getTidalArtistNames(item = {}) {
+  const artists = Array.isArray(item.artists) ? item.artists : [];
+  return artists.map((artist) => cleanText(artist?.name)).filter(Boolean);
+}
+
+function getTidalItems(searchJson) {
+  if (Array.isArray(searchJson?.items)) return searchJson.items;
+  if (Array.isArray(searchJson?.tracks?.items)) return searchJson.tracks.items;
+  if (Array.isArray(searchJson?.data)) return searchJson.data;
+  return [];
+}
+
+function isTidalTrackMatch(item = {}, track = {}) {
+  const resultTitle = normalizeDiscogsMatchText(item.title || item.attributes?.title);
+  const trackTitle = normalizeDiscogsMatchText(track.title);
+  const trackArtist = normalizeDiscogsMatchText(track.artist);
+  const artistNames = getTidalArtistNames(item).join(" ") || cleanText(item.artist?.name || item.attributes?.artistName);
+  const resultArtist = normalizeDiscogsMatchText(artistNames);
+
+  if (!resultTitle || !trackTitle) return false;
+  if (resultTitle !== trackTitle && !resultTitle.includes(trackTitle) && !trackTitle.includes(resultTitle)) return false;
+  if (trackArtist && resultArtist && !resultArtist.includes(trackArtist) && !trackArtist.includes(resultArtist)) return false;
+  return true;
+}
+
+function chooseTidalTrack(searchJson, track = {}) {
+  const items = getTidalItems(searchJson);
+  const result = items.find((entry) => isTidalTrackMatch(entry, track));
+  if (!result) return null;
+
+  const album = result.album || result.relationships?.albums?.data?.[0] || {};
+  const coverUuid = cleanText(album.cover || album.attributes?.cover || result.cover || result.attributes?.cover);
+  const coverImage = tidalCoverUrlFromUuid(coverUuid);
+  if (!coverImage) return null;
+
+  return {
+    title: cleanText(result.title || result.attributes?.title),
+    album: cleanText(album.title || album.attributes?.title),
+    coverImage
+  };
+}
+
 
 class RadioMetadataResolver extends EventEmitter {
   constructor({
@@ -195,6 +243,9 @@ class RadioMetadataResolver extends EventEmitter {
     cacheMax = DEFAULT_CACHE_MAX,
     minLookupIntervalMs = DEFAULT_MIN_LOOKUP_INTERVAL_MS,
     logger,
+    tidalArtworkEnabled = true,
+    tidalCountryCode = "US",
+    tidalAccessToken = "",
     discogsEnabled = true,
     discogsToken = "",
     fetchJson = defaultFetchJson,
@@ -205,6 +256,9 @@ class RadioMetadataResolver extends EventEmitter {
     this.cacheMax = Number(cacheMax) || DEFAULT_CACHE_MAX;
     this.minLookupIntervalMs = Number(minLookupIntervalMs) || DEFAULT_MIN_LOOKUP_INTERVAL_MS;
     this.logger = logger;
+    this.tidalArtworkEnabled = !!tidalArtworkEnabled;
+    this.tidalCountryCode = cleanText(tidalCountryCode || "US") || "US";
+    this.tidalAccessToken = cleanText(tidalAccessToken);
     this.discogsEnabled = !!discogsEnabled;
     this.discogsToken = cleanText(discogsToken);
     this.fetchJson = fetchJson;
@@ -304,6 +358,9 @@ class RadioMetadataResolver extends EventEmitter {
   }
 
   async lookup(track, key) {
+    const tidal = await this.lookupTidal(track, key);
+    if (tidal) return tidal;
+
     const discogs = await this.lookupDiscogs(track, key);
     if (discogs) return discogs;
 
@@ -333,6 +390,47 @@ class RadioMetadataResolver extends EventEmitter {
     return null;
   }
 
+  async lookupTidal(track, key) {
+    if (!this.tidalArtworkEnabled) return null;
+
+    try {
+      return await this.searchTidal(track, key);
+    } catch (error) {
+      this.logger?.debug?.("TIDAL artwork lookup failed", { error: error.message });
+      return null;
+    }
+  }
+
+  async searchTidal(track, key) {
+    const searches = [];
+    if (track.artist) searches.push(`${track.artist} ${track.title}`);
+    searches.push(track.title);
+
+    for (const query of searches) {
+      const searchUrl = new URL("https://api.tidal.com/v1/search/tracks");
+      searchUrl.searchParams.set("query", query);
+      searchUrl.searchParams.set("countryCode", this.tidalCountryCode);
+      searchUrl.searchParams.set("limit", "5");
+
+      const headers = {};
+      if (this.tidalAccessToken) headers.authorization = `Bearer ${this.tidalAccessToken}`;
+
+      const searchJson = await this.fetchJson(searchUrl.toString(), { headers });
+      const result = chooseTidalTrack(searchJson, track);
+      if (!result) continue;
+
+      return {
+        key,
+        title: track.title,
+        artist: track.artist,
+        album: cleanText(result.album || result.title),
+        albumArtUrl: result.coverImage,
+        source: "tidal"
+      };
+    }
+
+    return null;
+  }
   async lookupDiscogs(track, key) {
     if (!this.discogsEnabled || !this.discogsToken) return null;
 
@@ -408,16 +506,22 @@ class RadioMetadataResolver extends EventEmitter {
     }
   }
 
-  updateConfig({ enabled, cacheMax, minLookupIntervalMs, discogsEnabled, discogsToken } = {}) {
+  updateConfig({ enabled, cacheMax, minLookupIntervalMs, tidalArtworkEnabled, tidalCountryCode, tidalAccessToken, discogsEnabled, discogsToken } = {}) {
     const nextEnabled = enabled !== undefined ? !!enabled : this.enabled;
     const nextCacheMax = Number(cacheMax) || this.cacheMax;
     const nextMinLookupIntervalMs = Number(minLookupIntervalMs) || this.minLookupIntervalMs;
+    const nextTidalArtworkEnabled = tidalArtworkEnabled !== undefined ? !!tidalArtworkEnabled : this.tidalArtworkEnabled;
+    const nextTidalCountryCode = tidalCountryCode !== undefined ? cleanText(tidalCountryCode || "US") || "US" : this.tidalCountryCode;
+    const nextTidalAccessToken = tidalAccessToken !== undefined ? cleanText(tidalAccessToken) : this.tidalAccessToken;
     const nextDiscogsEnabled = discogsEnabled !== undefined ? !!discogsEnabled : this.discogsEnabled;
     const nextDiscogsToken = discogsToken !== undefined ? cleanText(discogsToken) : this.discogsToken;
     const changed =
       nextEnabled !== this.enabled ||
       nextCacheMax !== this.cacheMax ||
       nextMinLookupIntervalMs !== this.minLookupIntervalMs ||
+      nextTidalArtworkEnabled !== this.tidalArtworkEnabled ||
+      nextTidalCountryCode !== this.tidalCountryCode ||
+      nextTidalAccessToken !== this.tidalAccessToken ||
       nextDiscogsEnabled !== this.discogsEnabled ||
       nextDiscogsToken !== this.discogsToken;
 
@@ -426,6 +530,9 @@ class RadioMetadataResolver extends EventEmitter {
     this.enabled = nextEnabled;
     this.cacheMax = nextCacheMax;
     this.minLookupIntervalMs = nextMinLookupIntervalMs;
+    this.tidalArtworkEnabled = nextTidalArtworkEnabled;
+    this.tidalCountryCode = nextTidalCountryCode;
+    this.tidalAccessToken = nextTidalAccessToken;
     this.discogsEnabled = nextDiscogsEnabled;
     this.discogsToken = nextDiscogsToken;
     this.cache.clear();
@@ -447,6 +554,8 @@ module.exports = {
   chooseCoverImage,
   chooseRelease,
   chooseDiscogsResult,
+  chooseTidalTrack,
+  tidalCoverUrlFromUuid,
   getRadioStationName
 };
 

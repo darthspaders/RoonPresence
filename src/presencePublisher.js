@@ -44,6 +44,7 @@ class PresencePublisher {
     signalPathProvider,
     albumArtProvider,
     radioMetadataResolver,
+    scrobbler,
     defaultImageKey = "",
     tidalButton,
     clock = () => Date.now(),
@@ -57,6 +58,7 @@ class PresencePublisher {
     this.signalPathProvider = signalPathProvider;
     this.albumArtProvider = albumArtProvider;
     this.radioMetadataResolver = radioMetadataResolver;
+    this.scrobbler = scrobbler;
     this.defaultImageKey = defaultImageKey;
     this.tidalButton = normalizeTidalButtonConfig(tidalButton);
     this.clock = clock;
@@ -76,6 +78,7 @@ class PresencePublisher {
     const presence = this.mapper.mapPresence(zone);
     if (!presence) return false;
     this.radioMetadataResolver?.apply?.(presence);
+    this.scrobbler?.maybeScrobble?.(presence);
     this.applyExternalSignalPath(presence);
 
     const signature = this.createSignature(presence);

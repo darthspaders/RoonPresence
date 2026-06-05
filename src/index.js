@@ -11,6 +11,7 @@ const { createMemoryMonitor } = require("./memoryMonitor");
 const { AlbumArtProxy } = require("./albumArtProxy");
 const { HealthStatus } = require("./healthStatus");
 const { RadioMetadataResolver } = require("./radioMetadataResolver");
+const { LastFmScrobbler } = require("./lastFmScrobbler");
 
 function main() {
   const config = readConfig();
@@ -47,8 +48,18 @@ function main() {
     enabled: config.radioMetadata.enabled,
     cacheMax: config.radioMetadata.cacheMax,
     minLookupIntervalMs: config.radioMetadata.minLookupIntervalMs,
+    tidalArtworkEnabled: config.radioMetadata.tidalArtworkEnabled,
+    tidalCountryCode: config.radioMetadata.tidalCountryCode,
+    tidalAccessToken: config.radioMetadata.tidalAccessToken,
     discogsEnabled: config.radioMetadata.discogsEnabled,
     discogsToken: config.radioMetadata.discogsToken,
+    logger
+  });
+  const scrobbler = new LastFmScrobbler({
+    enabled: config.lastFm.enabled,
+    apiKey: config.lastFm.apiKey,
+    apiSecret: config.lastFm.apiSecret,
+    sessionKey: config.lastFm.sessionKey,
     logger
   });
   const publisher = new PresencePublisher({
@@ -58,6 +69,7 @@ function main() {
     signalPathProvider: hqplayerStatus,
     albumArtProvider: albumArtProxy,
     radioMetadataResolver,
+    scrobbler,
     defaultImageKey: config.discordDefaultImageKey,
     tidalButton: config.tidalButton,
     debugPayload: config.debugDiscordPayload
@@ -129,13 +141,22 @@ function main() {
           enabled: freshConfig.radioMetadata.enabled,
           cacheMax: freshConfig.radioMetadata.cacheMax,
           minLookupIntervalMs: freshConfig.radioMetadata.minLookupIntervalMs,
+          tidalArtworkEnabled: freshConfig.radioMetadata.tidalArtworkEnabled,
+          tidalCountryCode: freshConfig.radioMetadata.tidalCountryCode,
+          tidalAccessToken: freshConfig.radioMetadata.tidalAccessToken,
           discogsEnabled: freshConfig.radioMetadata.discogsEnabled,
           discogsToken: freshConfig.radioMetadata.discogsToken
+        });
+        const scrobblerChanged = scrobbler.updateConfig({
+          enabled: freshConfig.lastFm.enabled,
+          apiKey: freshConfig.lastFm.apiKey,
+          apiSecret: freshConfig.lastFm.apiSecret,
+          sessionKey: freshConfig.lastFm.sessionKey
         });
         const publisherChanged = publisher.updateConfig({
           tidalButton: freshConfig.tidalButton
         });
-        if (changed || albumArtChanged || radioMetadataChanged || publisherChanged) {
+        if (changed || albumArtChanged || radioMetadataChanged || scrobblerChanged || publisherChanged) {
           logger.info("Reloaded settings from .env");
           health.update(
             "albumArt",

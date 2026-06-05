@@ -26,6 +26,9 @@ const DEFAULTS = {
   TIDAL_BUTTON_ENABLED: "true",
   TIDAL_BUTTON_LABEL: "Play on TIDAL",
   TIDAL_SEARCH_BASE_URL: "https://tidal.com/search?q=",
+  TIDAL_ARTWORK_LOOKUP: "true",
+  TIDAL_COUNTRY_CODE: "US",
+  TIDAL_ACCESS_TOKEN: "",
   ALBUM_ART_PUBLIC_BASE_URL: "https://art.darthspader.com",
   ALBUM_ART_PROXY_PORT: "8787",
   ALBUM_ART_CACHE_MAX: "40",
@@ -33,7 +36,11 @@ const DEFAULTS = {
   RADIO_METADATA_CACHE_MAX: "200",
   RADIO_METADATA_MIN_LOOKUP_INTERVAL_MS: "1500",
   DISCOGS_LOOKUP: "true",
-  DISCOGS_TOKEN: ""
+  DISCOGS_TOKEN: "",
+  LASTFM_SCROBBLE_RADIO: "false",
+  LASTFM_API_KEY: "",
+  LASTFM_API_SECRET: "",
+  LASTFM_SESSION_KEY: ""
 };
 
 const ORDER = Object.keys(DEFAULTS);
@@ -125,6 +132,19 @@ async function main() {
     if (useTidal) {
       await ask(rl, values, "TIDAL_BUTTON_LABEL", "TIDAL button label");
       await ask(rl, values, "TIDAL_SEARCH_BASE_URL", "TIDAL search base URL");
+    }
+
+    const useTidalArtwork = await askYesNo(rl, values, "TIDAL_ARTWORK_LOOKUP", "Use TIDAL first for radio artwork?");
+    if (useTidalArtwork) {
+      await ask(rl, values, "TIDAL_COUNTRY_CODE", "TIDAL country code");
+      await ask(rl, values, "TIDAL_ACCESS_TOKEN", "TIDAL access token (optional)", { secret: true });
+    }
+
+    const useLastFm = await askYesNo(rl, values, "LASTFM_SCROBBLE_RADIO", "Scrobble parsed radio tracks to Last.fm?");
+    if (useLastFm) {
+      await ask(rl, values, "LASTFM_API_KEY", "Last.fm API key", { secret: true });
+      await ask(rl, values, "LASTFM_API_SECRET", "Last.fm shared secret", { secret: true });
+      await ask(rl, values, "LASTFM_SESSION_KEY", "Last.fm session key", { secret: true });
     }
 
     fs.writeFileSync(ENV_PATH, serializeEnv(values));
