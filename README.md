@@ -20,6 +20,41 @@ npm start
 
 The setup wizard creates your personal `.env` config file and prompts for the required Discord Client ID plus optional album art, Discogs, HQPlayer, and TIDAL settings.
 
+## Getting API Keys
+
+### Discord Client ID
+
+RoonPresence needs a Discord application Client ID so Discord knows which Rich Presence app is publishing your status.
+
+1. Open the Discord Developer Portal: https://discord.com/developers/applications
+2. Click **New Application**.
+3. Name it `RoonPresence`, then create it.
+4. Open the app's **General Information** page.
+5. Copy the **Application ID**. Discord also calls this the **Client ID**.
+6. Paste it into setup when asked for `Discord application client ID`, or set it in `.env`:
+
+```env
+DISCORD_CLIENT_ID=your_application_id_here
+```
+
+Discord's own developer support notes that the Application ID, also known as the Client ID, is found in the Developer Portal under General Information: https://support-dev.discord.com/hc/en-us/articles/360028717192-Where-can-I-find-my-Application-Team-Server-ID
+
+### Discogs Token
+
+Discogs is optional, but recommended for better radio artwork lookup.
+
+1. Sign in to Discogs: https://www.discogs.com
+2. Open developer settings: https://www.discogs.com/settings/developers
+3. Find **Personal Access Token**.
+4. Generate or copy your token.
+5. Paste it into setup when asked for `Discogs personal access token`, or set it in `.env`:
+
+```env
+DISCOGS_LOOKUP=true
+DISCOGS_TOKEN=your_discogs_token_here
+```
+
+Keep this token private. Do not paste it into GitHub issues, screenshots, or commits. Discogs API usage is governed by their API terms: https://support.discogs.com/hc/en-us/articles/360009334593-API-Terms-of-Use
 ## Known Good `.env`
 
 ```env
@@ -61,6 +96,21 @@ npm run setup
 
 Existing values are shown in brackets. Press Enter to keep them.
 
+## Portable Launcher
+
+Build a local Windows launcher exe:
+
+```powershell
+npm run build:launcher
+```
+
+The launcher is written to:
+
+```text
+dist\RoonPresence.exe
+```
+
+Place or keep `RoonPresence.exe` in the RoonPresence project folder. When opened, it checks for Node.js/npm, installs dependencies if `node_modules` is missing, runs guided setup if `.env` is missing, then starts RoonPresence.
 ## Run
 
 ```powershell
