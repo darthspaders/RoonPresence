@@ -5,8 +5,16 @@ Command-line MVP for publishing the active Roon HQPlayer zone to Discord Rich Pr
 ## Quick Install (Windows)
 
 1. Install Node.js LTS.
-2. Open PowerShell.
-3. Run:
+2. Download or clone RoonPresence.
+3. Open the RoonPresence folder.
+4. Run `RoonPresence.exe`.
+5. In Roon, go to **Settings > Extensions** and enable **RoonPresence**.
+
+The launcher installs dependencies if needed, runs guided setup if `.env` is missing, then starts RoonPresence.
+
+## Manual CLI Install
+
+Use this path if you want to run directly from PowerShell instead of the portable launcher:
 
 ```powershell
 git clone https://github.com/darthspaders/RoonPresence.git
@@ -15,10 +23,6 @@ npm install
 npm run setup
 npm start
 ```
-
-4. In Roon, go to **Settings > Extensions** and enable **RoonPresence**.
-
-The setup wizard creates your personal `.env` config file and prompts for the required Discord Client ID plus optional album art, Discogs, HQPlayer, and TIDAL settings.
 
 ## Getting API Keys
 
@@ -55,6 +59,7 @@ DISCOGS_TOKEN=your_discogs_token_here
 ```
 
 Keep this token private. Do not paste it into GitHub issues, screenshots, or commits. Discogs API usage is governed by their API terms: https://support.discogs.com/hc/en-us/articles/360009334593-API-Terms-of-Use
+
 ## Known Good `.env`
 
 ```env
@@ -111,6 +116,7 @@ dist\RoonPresence.exe
 ```
 
 Place or keep `RoonPresence.exe` in the RoonPresence project folder. When opened, it checks for Node.js/npm, installs dependencies if `node_modules` is missing, runs guided setup if `.env` is missing, then starts RoonPresence.
+
 ## Run
 
 ```powershell
