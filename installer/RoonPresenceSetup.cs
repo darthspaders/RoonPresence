@@ -27,14 +27,17 @@ namespace RoonPresenceSetup
             var createDesktopLauncher = AskYesNo("Create desktop launcher", true);
             Console.WriteLine();
 
-            if (!CommandWorks("node", "--version"))
+            var nodeCommand = ResolveCommand("node.exe");
+            var npmCommand = ResolveCommand("npm.cmd");
+
+            if (!CommandWorks(nodeCommand, "--version"))
             {
                 Console.Error.WriteLine("Node.js was not found. Install Node.js LTS, then run this setup again.");
                 Pause();
                 return 1;
             }
 
-            if (!CommandWorks("npm.cmd", "--version"))
+            if (!CommandWorks(npmCommand, "--version"))
             {
                 Console.Error.WriteLine("npm was not found. Install Node.js LTS, then run this setup again.");
                 Pause();
@@ -48,14 +51,14 @@ namespace RoonPresenceSetup
 
                 Console.WriteLine();
                 Console.WriteLine("Installing dependencies...");
-                var installCode = Run("npm.cmd", "install", installDir);
+                var installCode = Run(npmCommand, "install", installDir);
                 if (installCode != 0) return installCode;
 
                 if (!File.Exists(Path.Combine(installDir, ".env")))
                 {
                     Console.WriteLine();
                     Console.WriteLine("Starting guided setup...");
-                    var setupCode = Run("npm.cmd", "run setup", installDir);
+                    var setupCode = Run(npmCommand, "run setup", installDir);
                     if (setupCode != 0) return setupCode;
                 }
                 else
@@ -190,6 +193,39 @@ namespace RoonPresenceSetup
             }
         }
 
+        private static string ResolveCommand(string fileName)
+        {
+            var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            var programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+            var candidates = new[]
+            {
+                Path.Combine(programFiles, "nodejs", fileName),
+                Path.Combine(programFilesX86, "nodejs", fileName)
+            };
+
+            foreach (var candidate in candidates)
+            {
+                if (File.Exists(candidate)) return candidate;
+            }
+
+            var path = Environment.GetEnvironmentVariable("PATH") ?? "";
+            foreach (var directory in path.Split(Path.PathSeparator))
+            {
+                if (string.IsNullOrWhiteSpace(directory)) continue;
+                try
+                {
+                    var candidate = Path.Combine(directory.Trim(), fileName);
+                    if (File.Exists(candidate)) return candidate;
+                }
+                catch
+                {
+                    // Ignore malformed PATH entries.
+                }
+            }
+
+            return fileName;
+        }
+
         private static bool CommandWorks(string fileName, string arguments)
         {
             try
@@ -226,3 +262,4 @@ namespace RoonPresenceSetup
         }
     }
 }
+

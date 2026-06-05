@@ -12,4 +12,8 @@ if (-not (Test-Path -LiteralPath $csc)) {
 
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 & $csc /nologo /target:exe /platform:anycpu /out:$output $source
+if ($LASTEXITCODE -ne 0) {
+  throw "Compiler failed with exit code $LASTEXITCODE"
+}
 Write-Host "Built $output"
+
