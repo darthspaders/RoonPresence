@@ -224,6 +224,12 @@ To generate `LASTFM_SESSION_KEY`, run:
 npm run lastfm:auth
 ```
 
+If Last.fm shows `Invalid API key` after you approve in the browser, set your Last.fm API app Callback URL to `http://localhost/`, save it, and try again. If it still fails, use the HTTPS mobile-session fallback:
+
+```powershell
+npm run lastfm:mobile-auth
+```
+
 ## Stability Checks
 
 Use this quick pass after changes:
