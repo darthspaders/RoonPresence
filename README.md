@@ -218,6 +218,12 @@ LASTFM_SESSION_KEY=your_lastfm_session_key
 
 Last.fm `track.scrobble` requires an API key, shared secret, and authenticated session key: https://www.last.fm/api/show/track.scrobble
 
+To generate `LASTFM_SESSION_KEY`, run:
+
+```powershell
+npm run lastfm:auth
+```
+
 ## Stability Checks
 
 Use this quick pass after changes:
