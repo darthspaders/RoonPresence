@@ -51,7 +51,7 @@ namespace RoonPresenceSetup
 
                 Console.WriteLine();
                 Console.WriteLine("Installing dependencies...");
-                var installCode = Run(npmCommand, "install", installDir);
+                var installCode = InstallDependencies(npmCommand, installDir);
                 if (installCode != 0) return installCode;
 
                 if (!File.Exists(Path.Combine(installDir, ".env")))
@@ -173,6 +173,25 @@ namespace RoonPresenceSetup
             File.WriteAllText(path, content, Encoding.ASCII);
         }
 
+        private static int InstallDependencies(string npmCommand, string installDir)
+        {
+            var installCode = Run(npmCommand, "install", installDir);
+            if (installCode == 0) return 0;
+
+            Console.WriteLine();
+            Console.WriteLine("npm install failed; retrying without package-lock...");
+            try
+            {
+                var lockPath = Path.Combine(installDir, "package-lock.json");
+                if (File.Exists(lockPath)) File.Delete(lockPath);
+            }
+            catch (Exception error)
+            {
+                Console.WriteLine("Could not remove package-lock.json: " + error.Message);
+            }
+
+            return Run(npmCommand, "install --no-package-lock", installDir);
+        }
         private static string Ask(string prompt, string defaultValue)
         {
             Console.Write(prompt + " [" + defaultValue + "]: ");
@@ -262,4 +281,5 @@ namespace RoonPresenceSetup
         }
     }
 }
+
 

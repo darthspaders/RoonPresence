@@ -48,7 +48,7 @@ namespace RoonPresenceLauncher
             {
                 Console.WriteLine();
                 Console.WriteLine("Installing dependencies...");
-                var installCode = Run(npmCommand, "install", appDir);
+                var installCode = InstallDependencies(npmCommand, appDir);
                 if (installCode != 0)
                 {
                     Console.Error.WriteLine("npm install failed.");
@@ -78,6 +78,25 @@ namespace RoonPresenceLauncher
             return Run(npmCommand, "start", appDir);
         }
 
+        private static int InstallDependencies(string npmCommand, string appDir)
+        {
+            var installCode = Run(npmCommand, "install", appDir);
+            if (installCode == 0) return 0;
+
+            Console.WriteLine();
+            Console.WriteLine("npm install failed; retrying without package-lock...");
+            try
+            {
+                var lockPath = Path.Combine(appDir, "package-lock.json");
+                if (File.Exists(lockPath)) File.Delete(lockPath);
+            }
+            catch (Exception error)
+            {
+                Console.WriteLine("Could not remove package-lock.json: " + error.Message);
+            }
+
+            return Run(npmCommand, "install --no-package-lock", appDir);
+        }
         private static string ResolveCommand(string fileName)
         {
             var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
@@ -172,4 +191,5 @@ namespace RoonPresenceLauncher
         }
     }
 }
+
 
