@@ -41,6 +41,7 @@ test("scrobbler posts one parsed radio track once", async () => {
     apiKey: "api-key",
     apiSecret: "secret",
     sessionKey: "session",
+    clock: () => 1_780_000_123_000,
     fetchImpl: async (url, options) => {
       requests.push({ url, options, body: Object.fromEntries(options.body.entries()) });
       return {
@@ -58,7 +59,7 @@ test("scrobbler posts one parsed radio track once", async () => {
   assert.equal(requests[0].body.method, "track.scrobble");
   assert.equal(requests[0].body.artist, "E-Clip");
   assert.equal(requests[0].body.track, "Indian Spirit");
-  assert.equal(requests[0].body.timestamp, "1780000000");
+  assert.equal(requests[0].body.timestamp, "1780000123");
   assert.equal(requests[0].body.chosenByUser, "0");
   assert.ok(requests[0].body.api_sig);
 });

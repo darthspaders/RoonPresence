@@ -39,6 +39,39 @@ test("parses DI.FM station title with artist-title subtitle", () => {
     { artist: "E-Clip", title: "Indian Spirit" }
   );
 });
+test("parses Progressive DI.FM artist-title subtitle", () => {
+  assert.deepEqual(
+    parseRadioTrack({
+      title: "Progressive -DI.FM",
+      artist: "Ultraverse - Covenant (Original Mix)",
+      album: "DI.FM"
+    }),
+    { artist: "Ultraverse", title: "Covenant (Original Mix)" }
+  );
+});
+
+test("parses radio track from activity state fallback", () => {
+  assert.deepEqual(
+    parseRadioTrack({
+      title: "Covenant (Original Mix)",
+      artist: "Progressive -DI.FM",
+      album: "Progressive -DI.FM",
+      activityState: "Ultraverse - Covenant (Original Mix)"
+    }),
+    { artist: "Ultraverse", title: "Covenant (Original Mix)" }
+  );
+});
+
+test("combines split station title, track, and artist fields", () => {
+  assert.deepEqual(
+    parseRadioTrack({
+      title: "Progressive -DI.FM",
+      artist: "Covenant (Original Mix)",
+      album: "Ultraverse"
+    }),
+    { artist: "Ultraverse", title: "Covenant (Original Mix)" }
+  );
+});
 
 test("fills missing artist from separate field when title has station prefix", () => {
   assert.deepEqual(

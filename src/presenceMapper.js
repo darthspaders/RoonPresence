@@ -195,6 +195,9 @@ class PresenceMapper {
         title,
         artist,
         album: albumOrStation,
+        originalTitle: title,
+        originalArtist: artist,
+        originalAlbum: albumOrStation,
         zoneName,
         length,
         signalPath,
@@ -236,3 +239,4 @@ class PresenceMapper {
 }
 
 module.exports = { PresenceMapper, extractSignalPath };
+

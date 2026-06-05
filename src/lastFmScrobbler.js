@@ -73,10 +73,7 @@ class LastFmScrobbler {
     if (this.scrobbledKeys.has(key)) return false;
 
     this.scrobbledKeys.add(key);
-    const startTimestamp = Number.isFinite(presence.activity?.timestamps?.start)
-      ? presence.activity.timestamps.start
-      : this.clock();
-    const unixTimestamp = Math.max(1, Math.floor(startTimestamp / 1000));
+    const unixTimestamp = Math.max(1, Math.floor(this.clock() / 1000));
 
     this.scrobble(track, unixTimestamp).catch((error) => {
       this.logger?.warn?.("Last.fm radio scrobble failed", { error: error.message });

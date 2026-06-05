@@ -77,40 +77,53 @@ function parseRadioTrack(metadata = {}) {
   const title = stripRadioNoise(metadata.title);
   const artist = stripRadioNoise(metadata.artist);
   const album = stripRadioNoise(metadata.album);
+  const originalTitle = stripRadioNoise(metadata.originalTitle);
+  const originalArtist = stripRadioNoise(metadata.originalArtist);
+  const originalAlbum = stripRadioNoise(metadata.originalAlbum);
+  const activityDetails = stripRadioNoise(metadata.activityDetails);
+  const activityState = stripRadioNoise(metadata.activityState);
   const titleLooksStation = isStationText(title);
   const artistLooksStation = isStationText(artist);
+  const albumLooksStation = isStationText(album);
 
-  const artistParsed = splitArtistTitle(artist);
-  if (artistParsed && titleLooksStation) return artistParsed;
-
-  const titleParsed = splitArtistTitle(title);
-  if (titleParsed) {
-    if (!titleParsed.artist && artist && !artistLooksStation) {
-      return { artist, title: titleParsed.title };
-    }
-    return titleParsed;
+  const richCandidates = [artist, originalArtist, activityState, title, originalTitle, activityDetails, album, originalAlbum];
+  for (const value of richCandidates) {
+    const parsed = splitArtistTitle(value);
+    if (parsed?.artist && parsed?.title) return parsed;
   }
 
-  for (const value of [artist, album]) {
+  for (const value of [title, originalTitle, activityDetails]) {
     const parsed = splitArtistTitle(value);
-    if (parsed) return parsed;
+    if (!parsed?.title) continue;
+    if (parsed.artist) return parsed;
+    if (artist && !artistLooksStation) return { artist, title: parsed.title };
+    return { artist: "", title: parsed.title };
+  }
+
+  if (title && artist && titleLooksStation && !artistLooksStation) {
+    for (const candidate of [album, originalAlbum, activityState, originalArtist]) {
+      const cleanCandidate = stripRadioNoise(candidate);
+      if (cleanCandidate && !isStationText(cleanCandidate) && cleanCandidate !== artist) {
+        return { artist: cleanCandidate, title: artist };
+      }
+    }
+    return { artist: "", title: artist };
   }
 
   if (title && artist && !titleLooksStation && !artistLooksStation) {
     return { title, artist };
   }
 
-  if (title && artist && titleLooksStation && !artistLooksStation) {
-    return { artist: "", title: artist };
-  }
-
   if (title && artist && !artistLooksStation) {
     return { title, artist };
   }
 
+  if (title && !titleLooksStation && album && !albumLooksStation) {
+    return { artist: album, title };
+  }
+
   return null;
 }
-
 function makeLookupKey(track) {
   return `${normalizeKeyPart(track.artist)}|${normalizeKeyPart(track.title)}`;
 }
@@ -277,7 +290,11 @@ class RadioMetadataResolver extends EventEmitter {
     const stationName = getRadioStationName(presence.metadata);
     if (stationName) presence.metadata.radioStationName = stationName;
 
-    const track = parseRadioTrack(presence.metadata);
+    const track = parseRadioTrack({
+      ...presence.metadata,
+      activityDetails: presence.activity?.details,
+      activityState: presence.activity?.state
+    });
     if (!track) return false;
 
     const key = makeLookupKey(track);
