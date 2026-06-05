@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const readline = require("readline/promises");
 const { stdin: input, stdout: output } = require("process");
 const { createApiSignature } = require("../src/lastFmScrobbler");
@@ -56,12 +58,41 @@ function openUrl(url) {
     spawn("xdg-open", [url], { detached: true, stdio: "ignore" }).unref();
   }
 }
+function updateEnvValues(values, envPath = path.resolve(process.cwd(), ".env")) {
+  const existing = fs.existsSync(envPath) ? fs.readFileSync(envPath, "utf8") : "";
+  const lines = existing ? existing.split(/\r?\n/) : [];
+  const seen = new Set();
+  const nextLines = lines.map((line) => {
+    const match = /^\s*([A-Z0-9_]+)\s*=/.exec(line);
+    if (!match || !(match[1] in values)) return line;
+    seen.add(match[1]);
+    return `${match[1]}=${String(values[match[1]] || "").replace(/[\r\n]/g, " ").trim()}`;
+  });
 
-function printSessionKey(sessionJson) {
+  for (const [key, value] of Object.entries(values)) {
+    if (!seen.has(key)) {
+      nextLines.push(`${key}=${String(value || "").replace(/[\r\n]/g, " ").trim()}`);
+    }
+  }
+
+  fs.writeFileSync(envPath, nextLines.join("\r\n").replace(/(?:\r\n)*$/, "\r\n"));
+}
+
+function printSessionKey(sessionJson, { apiKey, apiSecret } = {}) {
   const sessionKey = clean(sessionJson.session?.key);
   if (!sessionKey) throw new Error("Last.fm did not return a session key.");
 
-  console.log("\nSuccess. Put this in .env:");
+  updateEnvValues({
+    LASTFM_SCROBBLE_RADIO: "true",
+    LASTFM_API_KEY: apiKey,
+    LASTFM_API_SECRET: apiSecret,
+    LASTFM_SESSION_KEY: sessionKey
+  });
+
+  console.log("\nSuccess. Saved Last.fm settings to .env:");
+  console.log("LASTFM_SCROBBLE_RADIO=true");
+  console.log(`LASTFM_API_KEY=${apiKey}`);
+  console.log("LASTFM_API_SECRET=********");
   console.log(`LASTFM_SESSION_KEY=${sessionKey}`);
 }
 
@@ -95,7 +126,7 @@ async function desktopAuth(rl, apiKey, apiSecret) {
   sessionParams.api_sig = createApiSignature(sessionParams, apiSecret);
 
   console.log("\nRequesting session key...");
-  printSessionKey(await requestJson(sessionParams));
+  printSessionKey(await requestJson(sessionParams), { apiKey, apiSecret });
 }
 
 async function mobileAuth(rl, apiKey, apiSecret) {
@@ -116,7 +147,7 @@ async function mobileAuth(rl, apiKey, apiSecret) {
   params.api_sig = createApiSignature(params, apiSecret);
 
   console.log("\nRequesting session key...");
-  printSessionKey(await postJson(params));
+  printSessionKey(await postJson(params), { apiKey, apiSecret });
 }
 
 async function main() {
@@ -124,7 +155,7 @@ async function main() {
   try {
     const useMobile = process.argv.includes("--mobile");
     console.log(useMobile ? "Last.fm mobile session helper" : "Last.fm session key helper");
-    console.log("Paste your Last.fm API key and shared secret. They are not saved by this helper.\n");
+    console.log("Paste your Last.fm API key and shared secret. A successful session will be saved to .env.\n");
 
     const apiKey = clean(await rl.question("Last.fm API key: "));
     const apiSecret = clean(await rl.question("Last.fm shared secret: "));
@@ -157,4 +188,5 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { requestJson, postJson };
+module.exports = { requestJson, postJson, updateEnvValues };
+
