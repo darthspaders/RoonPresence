@@ -8,6 +8,7 @@
     "start": "node src/index.js",
     "setup": "node scripts/setup.js",
     "build:launcher": "powershell -ExecutionPolicy Bypass -File scripts/build-launcher.ps1",
+    "build:setup": "powershell -ExecutionPolicy Bypass -File scripts/build-setup.ps1",
     "test": "node --test"
   },
   "dependencies": {

@@ -101,6 +101,22 @@ npm run setup
 
 Existing values are shown in brackets. Press Enter to keep them.
 
+## GitHub Setup Wizard
+
+Build a setup wizard exe for GitHub Releases:
+
+```powershell
+npm run build:setup
+```
+
+The setup wizard is written to:
+
+```text
+dist\RoonPresenceSetup.exe
+```
+
+`RoonPresenceSetup.exe` downloads the latest GitHub zip, installs it to `%LOCALAPPDATA%\RoonPresence`, runs `npm install`, starts guided setup if `.env` is missing, and can create a desktop launcher.
+
 ## Portable Launcher
 
 Build a local Windows launcher exe:
