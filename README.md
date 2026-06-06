@@ -80,10 +80,12 @@ DEBUG_DISCORD_PAYLOAD=false
 MEMORY_LOG_MS=300000
 TIDAL_BUTTON_ENABLED=true
 TIDAL_BUTTON_LABEL=Play on TIDAL
+TIDAL_BUTTON_OPEN_MODE=manual
 TIDAL_SEARCH_BASE_URL=https://tidal.com/search?q=
 TIDAL_ARTWORK_LOOKUP=true
 TIDAL_COUNTRY_CODE=US
-TIDAL_ACCESS_TOKEN=
+TIDAL_CLIENT_ID=
+TIDAL_CLIENT_SECRET=
 ALBUM_ART_PUBLIC_BASE_URL=https://art.darthspader.com
 ALBUM_ART_PROXY_PORT=8787
 ALBUM_ART_CACHE_MAX=40
@@ -96,6 +98,7 @@ LASTFM_SCROBBLE_RADIO=false
 LASTFM_API_KEY=
 LASTFM_API_SECRET=
 LASTFM_SESSION_KEY=
+LASTFM_SCROBBLE_COOLDOWN_MS=900000
 ```
 
 ## Guided Setup
@@ -160,13 +163,14 @@ INFO HQPlayer signal path: ...
 INFO Publishing Discord presence: ...
 ```
 
-## TIDAL Button
+## TIDAL Button And Bridge Page
 
-RoonPresence can add a Discord button that opens a TIDAL search for the current artist and track:
+RoonPresence can add a Discord button that opens the current track on TIDAL when a resolved TIDAL track URL is available. With the album-art proxy enabled, that button opens a public bridge page first, then offers TIDAL, Spotify, and Apple Music links:
 
 ```env
 TIDAL_BUTTON_ENABLED=true
 TIDAL_BUTTON_LABEL=Play on TIDAL
+TIDAL_BUTTON_OPEN_MODE=manual
 TIDAL_SEARCH_BASE_URL=https://tidal.com/search?q=
 ```
 
@@ -174,17 +178,26 @@ Set `TIDAL_BUTTON_ENABLED=false` if you do not want the button.
 
 Discord only shows Rich Presence buttons to other users viewing your profile; you will not see your own TIDAL button on your own activity card.
 
+Public bridge pages use clean URLs like:
+
+```text
+https://art.darthspader.com/tidal/track/12345
+```
+
+These pages show blurred album art, foreground cover art, track title, artist, and buttons for TIDAL, Spotify search, Apple Music search, sharing, and copying the clean link. The page metadata includes Open Graph/Twitter tags so shared links get rich previews in Discord and other apps.
+
 ## TIDAL Artwork
 
-For live radio metadata, RoonPresence tries TIDAL artwork first, then Discogs, then MusicBrainz/Cover Art Archive. The TIDAL image URL is still sent through the album-art proxy before Discord receives it.
+For live radio metadata, RoonPresence tries TIDAL artwork first, then Discogs, then MusicBrainz/Cover Art Archive. TIDAL is used only to identify the right track/album; the image is downloaded and cached through the album-art proxy before Discord receives it.
 
 ```env
 TIDAL_ARTWORK_LOOKUP=true
 TIDAL_COUNTRY_CODE=US
-TIDAL_ACCESS_TOKEN=
+TIDAL_CLIENT_ID=your_tidal_client_id
+TIDAL_CLIENT_SECRET=your_tidal_client_secret
 ```
 
-`TIDAL_ACCESS_TOKEN` is optional. If TIDAL blocks unauthenticated lookup, paste a valid TIDAL access token there.
+For TIDAL artwork lookup, use the **Client ID** and **Client Secret** from your TIDAL developer app. RoonPresence requests a short-lived access token automatically, uses TIDAL to match radio track metadata, then downloads/caches the artwork through your album-art proxy before sending only the proxy URL to Discord.
 
 ## Album Art
 
@@ -199,21 +212,37 @@ ALBUM_ART_PROXY_PORT=8787
 
 When this is not set, the app logs that album art was found but does not send the private Roon URL to Discord.
 
+## Personal Now Playing Feed
+
+When the album-art proxy is running, RoonPresence also serves a personal now-playing dashboard:
+
+```text
+http://127.0.0.1:8787/now
+https://art.darthspader.com/now
+```
+
+The page shows the current track, album art, artist, HQPlayer/radio line, TIDAL/Spotify/Apple Music links, and a small recently played history. It updates from the same final payload used for Discord Rich Presence, so it is useful when you want to see your own now-playing buttons without logging into another Discord account.
+
+For public access, `ALBUM_ART_PUBLIC_BASE_URL` must point to a public HTTPS tunnel or proxy that reaches `ALBUM_ART_PROXY_PORT`.
+
 ## Radio Metadata
 
 For radio streams that only provide station artwork, RoonPresence can look up track artwork using the live artist/title text from Roon. TIDAL is tried first, Discogs is tried next when `DISCOGS_TOKEN` is set, then MusicBrainz and Cover Art Archive are used as fallback. Results are cached in memory and lookups are rate-limited by `RADIO_METADATA_MIN_LOOKUP_INTERVAL_MS`.
 
 If lookup fails or the stream only reports station text, RoonPresence uses `DISCORD_DEFAULT_IMAGE_KEY` so Discord shows the app artwork and can still display the station name as image text.
 
+Radio stream tracks are also parsed into artist/title for the TIDAL bridge page, Last.fm scrobbling, and the `/now` feed when enough metadata is available.
+
 ## Last.fm Radio Scrobbling
 
-RoonPresence can scrobble radio tracks to Last.fm, but only when the radio metadata can be parsed into both artist and track title. Title-only radio mixes, station-only text, and local library tracks are not scrobbled.
+RoonPresence can scrobble radio tracks to Last.fm, but only when the radio metadata can be parsed into both artist and track title. Title-only radio mixes, station-only text, and local library tracks are not scrobbled. A small local cooldown cache prevents the same radio track from being re-scrobbled for 15 minutes after restarting the app.
 
 ```env
 LASTFM_SCROBBLE_RADIO=true
 LASTFM_API_KEY=your_lastfm_api_key
 LASTFM_API_SECRET=your_lastfm_shared_secret
 LASTFM_SESSION_KEY=your_lastfm_session_key
+LASTFM_SCROBBLE_COOLDOWN_MS=900000
 ```
 
 Last.fm `track.scrobble` requires an API key, shared secret, and authenticated session key: https://www.last.fm/api/show/track.scrobble

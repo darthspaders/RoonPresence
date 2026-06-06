@@ -16,6 +16,7 @@ const { LastFmScrobbler } = require("./lastFmScrobbler");
 function main() {
   const config = readConfig();
   const logger = createLogger(config.logLevel);
+  const lastFmCachePath = path.join(__dirname, "..", ".lastfm-scrobble-cache.json");
   const health = new HealthStatus({ logger, config });
 
   if (!config.discordClientId) {
@@ -51,8 +52,11 @@ function main() {
     tidalArtworkEnabled: config.radioMetadata.tidalArtworkEnabled,
     tidalCountryCode: config.radioMetadata.tidalCountryCode,
     tidalAccessToken: config.radioMetadata.tidalAccessToken,
+    tidalClientId: config.radioMetadata.tidalClientId,
+    tidalClientSecret: config.radioMetadata.tidalClientSecret,
     discogsEnabled: config.radioMetadata.discogsEnabled,
     discogsToken: config.radioMetadata.discogsToken,
+    albumArtProvider: albumArtProxy,
     logger
   });
   const scrobbler = new LastFmScrobbler({
@@ -60,6 +64,8 @@ function main() {
     apiKey: config.lastFm.apiKey,
     apiSecret: config.lastFm.apiSecret,
     sessionKey: config.lastFm.sessionKey,
+    scrobbleCooldownMs: config.lastFm.scrobbleCooldownMs,
+    scrobbleCachePath: lastFmCachePath,
     logger
   });
   const publisher = new PresencePublisher({
@@ -144,6 +150,8 @@ function main() {
           tidalArtworkEnabled: freshConfig.radioMetadata.tidalArtworkEnabled,
           tidalCountryCode: freshConfig.radioMetadata.tidalCountryCode,
           tidalAccessToken: freshConfig.radioMetadata.tidalAccessToken,
+          tidalClientId: freshConfig.radioMetadata.tidalClientId,
+          tidalClientSecret: freshConfig.radioMetadata.tidalClientSecret,
           discogsEnabled: freshConfig.radioMetadata.discogsEnabled,
           discogsToken: freshConfig.radioMetadata.discogsToken
         });
@@ -151,7 +159,9 @@ function main() {
           enabled: freshConfig.lastFm.enabled,
           apiKey: freshConfig.lastFm.apiKey,
           apiSecret: freshConfig.lastFm.apiSecret,
-          sessionKey: freshConfig.lastFm.sessionKey
+          sessionKey: freshConfig.lastFm.sessionKey,
+          scrobbleCooldownMs: freshConfig.lastFm.scrobbleCooldownMs,
+          scrobbleCachePath: lastFmCachePath
         });
         const publisherChanged = publisher.updateConfig({
           tidalButton: freshConfig.tidalButton

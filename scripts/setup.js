@@ -27,8 +27,9 @@ const DEFAULTS = {
   TIDAL_BUTTON_LABEL: "Play on TIDAL",
   TIDAL_SEARCH_BASE_URL: "https://tidal.com/search?q=",
   TIDAL_ARTWORK_LOOKUP: "true",
-  TIDAL_COUNTRY_CODE: "US",
-  TIDAL_ACCESS_TOKEN: "",
+  TIDAL_COUNTRY_CODE: "US",
+  TIDAL_CLIENT_ID: "",
+  TIDAL_CLIENT_SECRET: "",
   ALBUM_ART_PUBLIC_BASE_URL: "https://art.darthspader.com",
   ALBUM_ART_PROXY_PORT: "8787",
   ALBUM_ART_CACHE_MAX: "40",
@@ -134,10 +135,11 @@ async function main() {
       await ask(rl, values, "TIDAL_SEARCH_BASE_URL", "TIDAL search base URL");
     }
 
-    const useTidalArtwork = await askYesNo(rl, values, "TIDAL_ARTWORK_LOOKUP", "Use TIDAL first for radio artwork?");
+    const useTidalArtwork = await askYesNo(rl, values, "TIDAL_ARTWORK_LOOKUP", "Use TIDAL for radio artwork?");
     if (useTidalArtwork) {
       await ask(rl, values, "TIDAL_COUNTRY_CODE", "TIDAL country code");
-      await ask(rl, values, "TIDAL_ACCESS_TOKEN", "TIDAL access token (optional)", { secret: true });
+      await ask(rl, values, "TIDAL_CLIENT_ID", "TIDAL client ID (for artwork lookup)", { secret: true });
+      await ask(rl, values, "TIDAL_CLIENT_SECRET", "TIDAL client secret (for artwork lookup)", { secret: true });
     }
 
     const useLastFm = await askYesNo(rl, values, "LASTFM_SCROBBLE_RADIO", "Scrobble parsed radio tracks to Last.fm?");

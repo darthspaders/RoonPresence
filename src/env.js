@@ -43,8 +43,7 @@ function readRuntimeEnv() {
 }
 
 function readConfig() {
-  loadDotEnv();
-  return configFromEnv(process.env);
+  return configFromEnv(readRuntimeEnv());
 }
 
 function readConfigFresh() {
@@ -69,12 +68,21 @@ function configFromEnv(env) {
     tidalButton: {
       enabled: !/^(0|false|no)$/i.test(env.TIDAL_BUTTON_ENABLED || "true"),
       label: env.TIDAL_BUTTON_LABEL || "Play on TIDAL",
-      searchBaseUrl: env.TIDAL_SEARCH_BASE_URL || "https://tidal.com/search?q="
+      searchBaseUrl: env.TIDAL_SEARCH_BASE_URL || "https://tidal.com/search?q=",
+      openMode: env.TIDAL_BUTTON_OPEN_MODE || "bridge"
+    },
+    spotifyArtwork: {
+      enabled: /^(1|true|yes)$/i.test(env.SPOTIFY_ARTWORK_LOOKUP || ""),
+      market: env.SPOTIFY_MARKET || "US",
+      clientId: env.SPOTIFY_CLIENT_ID || "",
+      clientSecret: env.SPOTIFY_CLIENT_SECRET || ""
     },
     tidalArtwork: {
       enabled: !/^(0|false|no)$/i.test(env.TIDAL_ARTWORK_LOOKUP || "true"),
       countryCode: env.TIDAL_COUNTRY_CODE || "US",
-      accessToken: env.TIDAL_ACCESS_TOKEN || ""
+      accessToken: env.TIDAL_ACCESS_TOKEN || "",
+      clientId: env.TIDAL_CLIENT_ID || "",
+      clientSecret: env.TIDAL_CLIENT_SECRET || ""
     },
     albumArt: {
       publicBaseUrl: env.ALBUM_ART_PUBLIC_BASE_URL || "",
@@ -85,9 +93,15 @@ function configFromEnv(env) {
       enabled: !/^(0|false|no)$/i.test(env.RADIO_METADATA_LOOKUP || "true"),
       cacheMax: Number(env.RADIO_METADATA_CACHE_MAX || 200),
       minLookupIntervalMs: Number(env.RADIO_METADATA_MIN_LOOKUP_INTERVAL_MS || 1500),
+      spotifyArtworkEnabled: /^(1|true|yes)$/i.test(env.SPOTIFY_ARTWORK_LOOKUP || ""),
+      spotifyMarket: env.SPOTIFY_MARKET || "US",
+      spotifyClientId: env.SPOTIFY_CLIENT_ID || "",
+      spotifyClientSecret: env.SPOTIFY_CLIENT_SECRET || "",
       tidalArtworkEnabled: !/^(0|false|no)$/i.test(env.TIDAL_ARTWORK_LOOKUP || "true"),
       tidalCountryCode: env.TIDAL_COUNTRY_CODE || "US",
       tidalAccessToken: env.TIDAL_ACCESS_TOKEN || "",
+      tidalClientId: env.TIDAL_CLIENT_ID || "",
+      tidalClientSecret: env.TIDAL_CLIENT_SECRET || "",
       discogsEnabled: !/^(0|false|no)$/i.test(env.DISCOGS_LOOKUP || "true"),
       discogsToken: env.DISCOGS_TOKEN || ""
     },
@@ -95,7 +109,8 @@ function configFromEnv(env) {
       enabled: /^(1|true|yes)$/i.test(env.LASTFM_SCROBBLE_RADIO || ""),
       apiKey: env.LASTFM_API_KEY || "",
       apiSecret: env.LASTFM_API_SECRET || "",
-      sessionKey: env.LASTFM_SESSION_KEY || ""
+      sessionKey: env.LASTFM_SESSION_KEY || "",
+      scrobbleCooldownMs: Number(env.LASTFM_SCROBBLE_COOLDOWN_MS || 900000)
     },
     roon: {
       extension_id: env.ROON_EXTENSION_ID || "com.example.roon-discord-cli",

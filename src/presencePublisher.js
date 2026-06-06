@@ -32,8 +32,20 @@ function normalizeTidalButtonConfig(config = {}) {
   return {
     enabled: !!config.enabled,
     label: cleanText(config.label || "Play on TIDAL").slice(0, 32),
-    searchBaseUrl: cleanText(config.searchBaseUrl || "https://tidal.com/search?q=")
+    searchBaseUrl: cleanText(config.searchBaseUrl || "https://tidal.com/search?q="),
+    openMode: cleanText(config.openMode || "manual").toLowerCase()
   };
+}
+
+function isTidalBridgeMode(value) {
+  return cleanText(value || "manual").toLowerCase() !== "web";
+}
+
+function normalizeTidalUrl(value) {
+  const url = cleanText(value);
+  const trackMatch = url.match(/^https?:\/\/(?:www\.)?(?:listen\.)?tidal\.com\/(?:browse\/)?track\/(\d+)/i);
+  if (trackMatch) return `https://tidal.com/browse/track/${trackMatch[1]}`;
+  return url;
 }
 
 class PresencePublisher {
@@ -101,6 +113,7 @@ class PresencePublisher {
       `Publishing Discord presence: ${presence.activity.details} - ${presence.activity.state}`
     );
     const rpcActivity = this.toDiscordRpcActivity(presence);
+    this.albumArtProvider?.updateNowPlaying?.(presence, rpcActivity);
     if (this.debugPayload) {
       console.log("[DISCORD PAYLOAD]", JSON.stringify(rpcActivity, null, 2));
     }
@@ -118,11 +131,13 @@ class PresencePublisher {
   }
 
   clear() {
+    this.scrobbler?.flush?.();
     this.lastPublishedSignature = "";
     this.lastPublishedIdentitySignature = "";
     this.lastPublishedAt = 0;
     this.lastZone = null;
     this.lastSkipLogAt = 0;
+    this.albumArtProvider?.clearNowPlaying?.();
     this.discord.clearActivity();
   }
 
@@ -198,15 +213,32 @@ class PresencePublisher {
   createButtons(presence) {
     if (!this.tidalButton.enabled) return [];
 
+    const tidalUrl = normalizeTidalUrl(presence.metadata?.tidalUrl);
     const query = this.createTidalSearchQuery(presence);
-    if (!query || !this.tidalButton.searchBaseUrl) return [];
+    const url = this.createTidalButtonUrl(tidalUrl, query, this.resolveAlbumArtUrl(presence), presence);
+    if (!url) return [];
 
     return [
       {
         label: this.tidalButton.label || "Play on TIDAL",
-        url: `${this.tidalButton.searchBaseUrl}${encodeURIComponent(query)}`
+        url
       }
     ];
+  }
+
+  createTidalButtonUrl(tidalUrl, query, albumArtUrl = "", presence = null) {
+    if (tidalUrl) {
+      const bridgeUrl = isTidalBridgeMode(this.tidalButton.openMode)
+        ? this.albumArtProvider?.getTidalBridgeUrl?.(tidalUrl, this.tidalButton.openMode, albumArtUrl, {
+            title: presence?.metadata?.title || "",
+            artist: presence?.metadata?.artist || ""
+          })
+        : "";
+      return bridgeUrl || tidalUrl;
+    }
+
+    if (!query || !this.tidalButton.searchBaseUrl) return "";
+    return this.tidalButton.searchBaseUrl + encodeURIComponent(query);
   }
 
   createTidalSearchQuery(presence) {
@@ -276,7 +308,10 @@ class PresencePublisher {
       defaultImageKey: this.defaultImageKey || "",
       tidalButtonEnabled: !!this.tidalButton.enabled,
       tidalButtonLabel: this.tidalButton.label || "",
-      tidalSearchQuery: this.createTidalSearchQuery(presence)
+      tidalButtonOpenMode: this.tidalButton.openMode || "",
+      tidalButtonUrl: this.createTidalButtonUrl(normalizeTidalUrl(presence.metadata.tidalUrl), this.createTidalSearchQuery(presence), presence.metadata.albumArtUrl || "", presence),
+      tidalSearchQuery: this.createTidalSearchQuery(presence),
+      tidalUrl: presence.metadata.tidalUrl || ""
     };
   }
 
@@ -306,5 +341,4 @@ module.exports = {
   DEFAULT_MIN_PUBLISH_INTERVAL_MS,
   DEFAULT_START_ROUNDING_MS
 };
-
 

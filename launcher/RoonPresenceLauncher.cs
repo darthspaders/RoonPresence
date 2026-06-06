@@ -6,97 +6,89 @@ namespace RoonPresenceLauncher
 {
     internal static class Program
     {
-        private static Process childProcess;
-
         private static int Main(string[] args)
         {
             Console.Title = "RoonPresence";
-            Console.WriteLine("RoonPresence Launcher");
-            Console.WriteLine("---------------------");
 
-            var appDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            if (!File.Exists(Path.Combine(appDir, "package.json")))
+            var workingDirectory = FindWorkingDirectory();
+            if (string.IsNullOrWhiteSpace(workingDirectory))
             {
-                Console.Error.WriteLine("Could not find package.json next to this launcher.");
-                Console.Error.WriteLine("Place RoonPresence.exe in the RoonPresence project folder and run it again.");
+                Console.Error.WriteLine("Could not find the RoonPresence working directory.");
+                Console.Error.WriteLine("Place RoonPresence.exe inside the RoonPresence folder, or install to:");
+                Console.Error.WriteLine(Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "RoonPresence"
+                ));
                 Pause();
                 return 1;
             }
 
-            Console.CancelKeyPress += delegate(object sender, ConsoleCancelEventArgs eventArgs)
-            {
-                eventArgs.Cancel = true;
-                TryStopChild();
-            };
+            Directory.SetCurrentDirectory(workingDirectory);
+            Console.WriteLine("RoonPresence");
+            Console.WriteLine("Working directory: " + workingDirectory);
+            Console.WriteLine();
 
-            var nodeCommand = ResolveCommand("node.exe");
             var npmCommand = ResolveCommand("npm.cmd");
-
-            if (!CommandExists(nodeCommand, "--version", appDir, "Node.js was not found. Install Node.js LTS, then run this launcher again."))
+            if (!CommandWorks(ResolveCommand("node.exe"), "--version") || !CommandWorks(npmCommand, "--version"))
             {
+                Console.Error.WriteLine("Node.js LTS was not found. Install Node.js LTS, then start RoonPresence again.");
                 Pause();
                 return 1;
             }
 
-            if (!CommandExists(npmCommand, "--version", appDir, "npm was not found. Install Node.js LTS, then run this launcher again."))
+            if (!Directory.Exists(Path.Combine(workingDirectory, "node_modules")))
             {
-                Pause();
-                return 1;
-            }
-
-            if (!Directory.Exists(Path.Combine(appDir, "node_modules")))
-            {
-                Console.WriteLine();
                 Console.WriteLine("Installing dependencies...");
-                var installCode = InstallDependencies(npmCommand, appDir);
+                var installCode = Run(npmCommand, "install", workingDirectory);
                 if (installCode != 0)
                 {
-                    Console.Error.WriteLine("npm install failed.");
                     Pause();
                     return installCode;
                 }
             }
 
-            if (!File.Exists(Path.Combine(appDir, ".env")))
+            if (!File.Exists(Path.Combine(workingDirectory, ".env")))
             {
-                Console.WriteLine();
-                Console.WriteLine("No .env file found. Starting guided setup...");
-                var setupCode = Run(npmCommand, "run setup", appDir);
+                Console.WriteLine("Starting guided setup...");
+                var setupCode = Run(npmCommand, "run setup", workingDirectory);
                 if (setupCode != 0)
                 {
-                    Console.Error.WriteLine("Setup did not complete.");
                     Pause();
                     return setupCode;
                 }
             }
 
-            Console.WriteLine();
-            Console.WriteLine("Starting RoonPresence...");
-            Console.WriteLine("Close this window or press Ctrl+C to stop.");
-            Console.WriteLine();
-
-            return Run(npmCommand, "start", appDir);
+            return Run(npmCommand, "start", workingDirectory);
         }
 
-        private static int InstallDependencies(string npmCommand, string appDir)
+        private static string FindWorkingDirectory()
         {
-            var installCode = Run(npmCommand, "install", appDir);
-            if (installCode == 0) return 0;
+            var exeDir = AppDomain.CurrentDomain.BaseDirectory;
+            if (IsProjectDirectory(exeDir)) return exeDir;
 
-            Console.WriteLine();
-            Console.WriteLine("npm install failed; retrying without package-lock...");
-            try
-            {
-                var lockPath = Path.Combine(appDir, "package-lock.json");
-                if (File.Exists(lockPath)) File.Delete(lockPath);
-            }
-            catch (Exception error)
-            {
-                Console.WriteLine("Could not remove package-lock.json: " + error.Message);
-            }
+            var parentInfo = Directory.GetParent(exeDir);
+            var parentDir = parentInfo == null ? "" : parentInfo.FullName;
+            if (IsProjectDirectory(parentDir)) return parentDir;
 
-            return Run(npmCommand, "install --no-package-lock", appDir);
+            var localInstallDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "RoonPresence"
+            );
+            if (IsProjectDirectory(localInstallDir)) return localInstallDir;
+
+            var currentDir = Environment.CurrentDirectory;
+            if (IsProjectDirectory(currentDir)) return currentDir;
+
+            return "";
         }
+
+        private static bool IsProjectDirectory(string directory)
+        {
+            if (string.IsNullOrWhiteSpace(directory)) return false;
+            return File.Exists(Path.Combine(directory, "package.json")) &&
+                Directory.Exists(Path.Combine(directory, "src"));
+        }
+
         private static string ResolveCommand(string fileName)
         {
             var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
@@ -123,36 +115,27 @@ namespace RoonPresenceLauncher
                 }
                 catch
                 {
-                    // Ignore malformed PATH entries.
                 }
             }
 
             return fileName;
         }
 
-        private static bool CommandExists(string fileName, string arguments, string workingDirectory, string failureMessage)
+        private static bool CommandWorks(string fileName, string arguments)
         {
             try
             {
-                var exitCode = Run(fileName, arguments, workingDirectory, false);
-                if (exitCode == 0) return true;
+                return Run(fileName, arguments, Environment.CurrentDirectory, false) == 0;
             }
             catch
             {
-                // Fall through to user-facing message.
+                return false;
             }
-
-            Console.Error.WriteLine(failureMessage);
-            return false;
         }
 
         private static int Run(string fileName, string arguments, string workingDirectory, bool echo = true)
         {
-            if (echo)
-            {
-                Console.WriteLine("> " + fileName + " " + arguments);
-            }
-
+            if (echo) Console.WriteLine("> " + fileName + " " + arguments);
             using (var process = new Process())
             {
                 process.StartInfo.FileName = fileName;
@@ -160,26 +143,9 @@ namespace RoonPresenceLauncher
                 process.StartInfo.WorkingDirectory = workingDirectory;
                 process.StartInfo.UseShellExecute = false;
                 process.StartInfo.CreateNoWindow = false;
-                childProcess = process;
                 process.Start();
                 process.WaitForExit();
-                childProcess = null;
                 return process.ExitCode;
-            }
-        }
-
-        private static void TryStopChild()
-        {
-            try
-            {
-                if (childProcess != null && !childProcess.HasExited)
-                {
-                    childProcess.Kill();
-                }
-            }
-            catch
-            {
-                // Best-effort shutdown.
             }
         }
 
@@ -191,5 +157,3 @@ namespace RoonPresenceLauncher
         }
     }
 }
-
-

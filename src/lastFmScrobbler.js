@@ -1,6 +1,8 @@
 const crypto = require("crypto");
+const fs = require("fs");
 
 const LASTFM_API_ROOT = "https://ws.audioscrobbler.com/2.0/";
+const DEFAULT_SCROBBLE_COOLDOWN_MS = 15 * 60 * 1000;
 
 function cleanText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -12,6 +14,41 @@ function normalizeKeyPart(value) {
 
 function makeScrobbleKey({ artist, title }) {
   return `${normalizeKeyPart(artist)}|${normalizeKeyPart(title)}`;
+}
+
+function readJsonFile(filePath) {
+  if (!filePath) return null;
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function writeJsonFile(filePath, value) {
+  if (!filePath) return;
+  try {
+    fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
+  } catch {
+    // Cache persistence is best-effort; scrobbling should keep working without it.
+  }
+}
+
+function readDurationMs(presence) {
+  const candidates = [
+    presence?.metadata?.trackDurationMs,
+    presence?.metadata?.durationMs,
+    presence?.metadata?.trackDurationSeconds !== undefined
+      ? Number(presence.metadata.trackDurationSeconds) * 1000
+      : null
+  ];
+
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+
+  return null;
 }
 
 function hasFullRadioTrack(presence) {
@@ -45,7 +82,9 @@ class LastFmScrobbler {
     sessionKey = "",
     logger,
     fetchImpl = globalThis.fetch,
-    clock = () => Date.now()
+    clock = () => Date.now(),
+    scrobbleCooldownMs = DEFAULT_SCROBBLE_COOLDOWN_MS,
+    scrobbleCachePath = ""
   } = {}) {
     this.enabled = !!enabled;
     this.apiKey = cleanText(apiKey);
@@ -54,7 +93,10 @@ class LastFmScrobbler {
     this.logger = logger;
     this.fetchImpl = fetchImpl;
     this.clock = clock;
-    this.scrobbledKeys = new Set();
+    this.scrobbleCooldownMs = Number(scrobbleCooldownMs) || DEFAULT_SCROBBLE_COOLDOWN_MS;
+    this.scrobbleCachePath = cleanText(scrobbleCachePath);
+    this.scrobbledAtByKey = new Map();
+    this.loadScrobbleCache();
   }
 
   get configured() {
@@ -70,16 +112,62 @@ class LastFmScrobbler {
       album: presence.metadata.radioArtworkResolved ? cleanText(presence.metadata.album) : ""
     };
     const key = cleanText(presence.metadata.radioTrackKey) || makeScrobbleKey(track);
-    if (this.scrobbledKeys.has(key)) return false;
+    const now = this.clock();
+    if (this.wasRecentlyScrobbled(key, now)) {
+      this.logger?.info?.(`Last.fm radio scrobble skipped; recently scrobbled: ${track.artist} - ${track.title}`);
+      return false;
+    }
 
-    this.scrobbledKeys.add(key);
-    const unixTimestamp = Math.max(1, Math.floor(this.clock() / 1000));
+    this.markScrobbled(key, now);
+    const unixTimestamp = Math.max(1, Math.floor(now / 1000));
     this.logger?.info?.(`Scrobbling radio track to Last.fm: ${track.artist} - ${track.title}`);
 
     this.scrobble(track, unixTimestamp).catch((error) => {
       this.logger?.warn?.("Last.fm radio scrobble failed", { error: error.message });
     });
     return true;
+  }
+
+  flush() {
+    return false;
+  }
+
+  wasRecentlyScrobbled(key, now = this.clock()) {
+    const lastAt = Number(this.scrobbledAtByKey.get(key));
+    return Number.isFinite(lastAt) && now - lastAt >= 0 && now - lastAt < this.scrobbleCooldownMs;
+  }
+
+  markScrobbled(key, now = this.clock()) {
+    this.scrobbledAtByKey.set(key, now);
+    this.pruneScrobbleCache(now);
+    this.saveScrobbleCache();
+  }
+
+  pruneScrobbleCache(now = this.clock()) {
+    const maxAge = Math.max(this.scrobbleCooldownMs, DEFAULT_SCROBBLE_COOLDOWN_MS);
+    for (const [key, timestamp] of this.scrobbledAtByKey) {
+      if (!Number.isFinite(Number(timestamp)) || now - Number(timestamp) > maxAge) {
+        this.scrobbledAtByKey.delete(key);
+      }
+    }
+  }
+
+  loadScrobbleCache() {
+    const json = readJsonFile(this.scrobbleCachePath);
+    const entries = json?.scrobbledAtByKey && typeof json.scrobbledAtByKey === "object" ? json.scrobbledAtByKey : {};
+    this.scrobbledAtByKey.clear();
+    for (const [key, timestamp] of Object.entries(entries)) {
+      const value = Number(timestamp);
+      if (key && Number.isFinite(value)) this.scrobbledAtByKey.set(key, value);
+    }
+    this.pruneScrobbleCache();
+  }
+
+  saveScrobbleCache() {
+    writeJsonFile(this.scrobbleCachePath, {
+      version: 1,
+      scrobbledAtByKey: Object.fromEntries(this.scrobbledAtByKey)
+    });
   }
 
   async scrobble(track, timestamp) {
@@ -128,16 +216,20 @@ class LastFmScrobbler {
     return json;
   }
 
-  updateConfig({ enabled, apiKey, apiSecret, sessionKey } = {}) {
+  updateConfig({ enabled, apiKey, apiSecret, sessionKey, scrobbleCooldownMs, scrobbleCachePath } = {}) {
     const nextEnabled = enabled !== undefined ? !!enabled : this.enabled;
     const nextApiKey = apiKey !== undefined ? cleanText(apiKey) : this.apiKey;
     const nextApiSecret = apiSecret !== undefined ? cleanText(apiSecret) : this.apiSecret;
     const nextSessionKey = sessionKey !== undefined ? cleanText(sessionKey) : this.sessionKey;
+    const nextScrobbleCooldownMs = scrobbleCooldownMs !== undefined ? Number(scrobbleCooldownMs) || DEFAULT_SCROBBLE_COOLDOWN_MS : this.scrobbleCooldownMs;
+    const nextScrobbleCachePath = scrobbleCachePath !== undefined ? cleanText(scrobbleCachePath) : this.scrobbleCachePath;
     const changed =
       nextEnabled !== this.enabled ||
       nextApiKey !== this.apiKey ||
       nextApiSecret !== this.apiSecret ||
-      nextSessionKey !== this.sessionKey;
+      nextSessionKey !== this.sessionKey ||
+      nextScrobbleCooldownMs !== this.scrobbleCooldownMs ||
+      nextScrobbleCachePath !== this.scrobbleCachePath;
 
     if (!changed) return false;
 
@@ -145,7 +237,11 @@ class LastFmScrobbler {
     this.apiKey = nextApiKey;
     this.apiSecret = nextApiSecret;
     this.sessionKey = nextSessionKey;
-    this.scrobbledKeys.clear();
+    const cachePathChanged = nextScrobbleCachePath !== this.scrobbleCachePath;
+    this.scrobbleCooldownMs = nextScrobbleCooldownMs;
+    this.scrobbleCachePath = nextScrobbleCachePath;
+    if (cachePathChanged) this.loadScrobbleCache();
+    else this.pruneScrobbleCache();
     return true;
   }
 }
@@ -154,8 +250,6 @@ module.exports = {
   LastFmScrobbler,
   createApiSignature,
   hasFullRadioTrack,
-  makeScrobbleKey
+  makeScrobbleKey,
+  readDurationMs
 };
-
-
-

@@ -4,4 +4,7 @@ node_modules/
 config.json
 npm-debug.log*
 dist/
-
+.lastfm-scrobble-cache.json
+.lastfm-auth-test.env
+.cache/
+assets/spotify-logo.png

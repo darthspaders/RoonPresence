@@ -373,6 +373,40 @@ test("radio album art shows station name as asset text", () => {
   assert.equal(activity.largeImageText, "Progressive House - DI.FM");
 });
 
+test("already proxied radio artwork is sent without wrapping again", () => {
+  const harness = createHarness();
+  let calls = 0;
+  harness.publisher.albumArtProvider = {
+    getPublicUrl: (sourceUrl) => {
+      calls += 1;
+      return sourceUrl;
+    }
+  };
+
+  const activity = harness.publisher.toDiscordRpcActivity({
+    timestampMode: "RADIO",
+    activity: {
+      details: "Indian Spirit - E-Clip",
+      state: "poly-sinc-gauss-hires-lp, PCM, 768kHz",
+      instance: false,
+      timestamps: { start: 2_000_000 }
+    },
+    metadata: {
+      title: "Indian Spirit",
+      artist: "E-Clip",
+      album: "Indian Spirit",
+      albumArtUrl: "https://art.example.com/art/cached.jpg",
+      albumArtKey: "radio:e-clip|indian spirit",
+      radioTrackKey: "e-clip|indian spirit",
+      radioArtworkResolved: true,
+      radioStationName: "04 Progressive Psy - DI.FM"
+    }
+  });
+
+  assert.equal(activity.largeImageKey, "https://art.example.com/art/cached.jpg");
+  assert.equal(calls, 1);
+});
+
 test("stale resolved radio artwork falls back to Discord app artwork", () => {
   const harness = createHarness();
   harness.publisher.defaultImageKey = "roonpresence";
@@ -447,6 +481,34 @@ test("republishLast refreshes Discord when only HQPlayer signal path changes", (
   assert.equal(harness.published[1].state, "poly-sinc-gauss-hires-mp, TPDF, PCM, 768kHz");
 });
 
+test("uses resolved TIDAL URL for radio button when available", () => {
+  const harness = createHarness();
+  harness.publisher.tidalButton = {
+    enabled: true,
+    label: "Play on TIDAL",
+    searchBaseUrl: "https://tidal.com/search?q="
+  };
+
+  const activity = harness.publisher.toDiscordRpcActivity({
+    timestampMode: "RADIO",
+    activity: {
+      details: "E-Clip - Indian Spirit",
+      state: "Progressive Psy - DI.FM",
+      instance: false,
+      timestamps: { start: 2_000_000 }
+    },
+    metadata: {
+      title: "Indian Spirit",
+      artist: "E-Clip",
+      tidalUrl: "https://tidal.com/browse/track/12345"
+    }
+  });
+
+  assert.deepEqual(activity.buttons, [
+    { label: "Play on TIDAL", url: "https://tidal.com/browse/track/12345" }
+  ]);
+});
+
 test("adds TIDAL search button for local tracks", () => {
   const harness = createHarness();
   harness.publisher.updateConfig({
@@ -500,3 +562,84 @@ test("adds TIDAL search button for parsed radio tracks", () => {
 });
 
 
+
+test("uses TIDAL bridge URL for radio button when proxy is available", () => {
+  const harness = createHarness();
+  harness.publisher.albumArtProvider = {
+    getPublicUrl: (sourceUrl) => sourceUrl,
+    getTidalBridgeUrl: (url, mode, albumArtUrl) => {
+      assert.equal(mode, "bridge");
+      assert.equal(albumArtUrl, "https://art.example.com/art/cover.jpg");
+      return url === "https://tidal.com/browse/track/12345" ? "https://art.example.com/tidal/track/12345?art=cover" : "";
+    }
+  };
+  harness.publisher.updateConfig({
+    tidalButton: {
+      enabled: true,
+      label: "Play on TIDAL",
+      searchBaseUrl: "https://tidal.com/search?q=",
+      openMode: "bridge"
+    }
+  });
+
+  const activity = harness.publisher.toDiscordRpcActivity({
+    timestampMode: "RADIO",
+    activity: { details: "Track", state: "Artist", timestamps: { start: 1 } },
+    metadata: {
+      title: "Track",
+      artist: "Artist",
+      tidalUrl: "https://tidal.com/browse/track/12345",
+      albumArtUrl: "https://art.example.com/art/cover.jpg",
+      albumArtKey: "radio:artist|track",
+      radioTrackKey: "artist|track",
+      radioArtworkResolved: true
+    }
+  });
+
+  assert.deepEqual(activity.buttons, [
+    { label: "Play on TIDAL", url: "https://art.example.com/tidal/track/12345?art=cover" }
+  ]);
+});
+
+test("changing TIDAL open mode republishes button URL", () => {
+  const harness = createHarness();
+  harness.publisher.albumArtProvider = {
+    getTidalBridgeUrl: (url, mode) => {
+      if (url !== "https://tidal.com/browse/track/12345") return "";
+      return mode === "manual"
+        ? "https://art.example.com/tidal/manual/12345"
+        : "https://art.example.com/tidal/track/12345";
+    }
+  };
+
+  harness.publisher.updateConfig({
+    tidalButton: {
+      enabled: true,
+      label: "Play on TIDAL",
+      searchBaseUrl: "https://tidal.com/search?q=",
+      openMode: "bridge"
+    }
+  });
+
+  assert.equal(harness.publisher.publishZone(radioZone({ title: "Track", artist: "Artist" })), true);
+  harness.publisher.radioMetadataResolver = {
+    apply: (presence) => {
+      presence.metadata.tidalUrl = "https://tidal.com/browse/track/12345";
+      return true;
+    }
+  };
+  assert.equal(harness.publisher.republishLast(), true);
+  assert.equal(harness.published.at(-1).buttons[0].url, "https://art.example.com/tidal/track/12345");
+
+  harness.publisher.updateConfig({
+    tidalButton: {
+      enabled: true,
+      label: "Play on TIDAL",
+      searchBaseUrl: "https://tidal.com/search?q=",
+      openMode: "manual"
+    }
+  });
+
+  assert.equal(harness.publisher.republishLast(), true);
+  assert.equal(harness.published.at(-1).buttons[0].url, "https://art.example.com/tidal/manual/12345");
+});
