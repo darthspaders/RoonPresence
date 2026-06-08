@@ -19,6 +19,9 @@
     "roon-api": "github:roonlabs/node-roon-api",
     "roon-api-transport": "github:roonlabs/node-roon-api-transport"
   },
+  "optionalDependencies": {
+    "sharp": "^0.34.5"
+  },
   "engines": {
     "node": ">=18"
   }

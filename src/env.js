@@ -87,7 +87,9 @@ function configFromEnv(env) {
     albumArt: {
       publicBaseUrl: env.ALBUM_ART_PUBLIC_BASE_URL || "",
       proxyPort: Number(env.ALBUM_ART_PROXY_PORT || 8787),
-      cacheMax: Number(env.ALBUM_ART_CACHE_MAX || 40)
+      cacheMax: Number(env.ALBUM_ART_CACHE_MAX || 40),
+      bridgeUsername: env.BRIDGE_USERNAME || env.ALBUM_ART_USERNAME || "",
+      bridgeBrandName: env.BRIDGE_BRAND_NAME || ""
     },
     radioMetadata: {
       enabled: !/^(0|false|no)$/i.test(env.RADIO_METADATA_LOOKUP || "true"),

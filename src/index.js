@@ -43,7 +43,10 @@ function main() {
     publicBaseUrl: config.albumArt.publicBaseUrl,
     port: config.albumArt.proxyPort,
     cacheMax: config.albumArt.cacheMax,
-    logger
+    logger,
+    persistNowPlaying: true,
+    bridgeUsername: config.albumArt.bridgeUsername,
+    bridgeBrandName: config.albumArt.bridgeBrandName
   });
   const radioMetadataResolver = new RadioMetadataResolver({
     enabled: config.radioMetadata.enabled,

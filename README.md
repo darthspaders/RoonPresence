@@ -87,6 +87,8 @@ TIDAL_COUNTRY_CODE=US
 TIDAL_CLIENT_ID=
 TIDAL_CLIENT_SECRET=
 ALBUM_ART_PUBLIC_BASE_URL=https://art.darthspader.com
+BRIDGE_USERNAME=darthspader
+BRIDGE_BRAND_NAME=darthspader.com
 ALBUM_ART_PROXY_PORT=8787
 ALBUM_ART_CACHE_MAX=40
 RADIO_METADATA_LOOKUP=true
@@ -110,6 +112,12 @@ npm run setup
 ```
 
 Existing values are shown in brackets. Press Enter to keep them.
+
+The setup wizard also asks for a public bridge username and brand name. For example, `BRIDGE_USERNAME=darthspader` makes your public now-playing page:
+
+```text
+https://art.darthspader.com/now/u/darthspader
+```
 
 ## GitHub Setup Wizard
 
@@ -219,9 +227,16 @@ When the album-art proxy is running, RoonPresence also serves a personal now-pla
 ```text
 http://127.0.0.1:8787/now
 https://art.darthspader.com/now
+https://art.darthspader.com/now/u/darthspader
 ```
 
-The page shows the current track, album art, artist, HQPlayer/radio line, TIDAL/Spotify/Apple Music links, and a small recently played history. It updates from the same final payload used for Discord Rich Presence, so it is useful when you want to see your own now-playing buttons without logging into another Discord account.
+The `/now/u/darthspader` form is the recommended public/share URL when `BRIDGE_USERNAME` is set. The older `/now` URL still works as a local/default fallback.
+
+The page shows the current track, album art, artist, HQPlayer/radio line, TIDAL/Spotify/Apple Music links, and a small recently played history. It updates from the same final payload used for Discord Rich Presence and refreshes only when the current track changes. The active track does not appear in Recently Played until it is replaced or playback clears, so the history behaves like finished/listened tracks instead of duplicating Now Playing.
+
+On the `/now` page, the TIDAL button opens the resolved TIDAL track directly instead of routing through the public bridge page again. Apple Music uses a web search link to avoid mobile app sign-in prompts.
+
+The public page also exposes a dynamic share-preview image. For the default page this is `/og/now.png`; for a configured bridge user it is `/og/now/u/darthspader.png`. When `sharp` is installed, that image is rendered as a 1200x630 PNG with blurred album art, foreground cover art, branding, track title, artist, and a Now Playing label. If the optional image renderer is unavailable, RoonPresence still serves a valid fallback PNG so social preview scrapers do not hit a broken image.
 
 For public access, `ALBUM_ART_PUBLIC_BASE_URL` must point to a public HTTPS tunnel or proxy that reaches `ALBUM_ART_PROXY_PORT`.
 

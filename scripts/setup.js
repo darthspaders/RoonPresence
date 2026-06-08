@@ -25,12 +25,15 @@ const DEFAULTS = {
   MEMORY_LOG_MS: "300000",
   TIDAL_BUTTON_ENABLED: "true",
   TIDAL_BUTTON_LABEL: "Play on TIDAL",
+  TIDAL_BUTTON_OPEN_MODE: "manual",
   TIDAL_SEARCH_BASE_URL: "https://tidal.com/search?q=",
   TIDAL_ARTWORK_LOOKUP: "true",
   TIDAL_COUNTRY_CODE: "US",
   TIDAL_CLIENT_ID: "",
   TIDAL_CLIENT_SECRET: "",
   ALBUM_ART_PUBLIC_BASE_URL: "https://art.darthspader.com",
+  BRIDGE_USERNAME: "darthspader",
+  BRIDGE_BRAND_NAME: "darthspader.com",
   ALBUM_ART_PROXY_PORT: "8787",
   ALBUM_ART_CACHE_MAX: "40",
   RADIO_METADATA_LOOKUP: "true",
@@ -41,7 +44,8 @@ const DEFAULTS = {
   LASTFM_SCROBBLE_RADIO: "false",
   LASTFM_API_KEY: "",
   LASTFM_API_SECRET: "",
-  LASTFM_SESSION_KEY: ""
+  LASTFM_SESSION_KEY: "",
+  LASTFM_SCROBBLE_COOLDOWN_MS: "900000"
 };
 
 const ORDER = Object.keys(DEFAULTS);
@@ -123,6 +127,8 @@ async function main() {
     await ask(rl, values, "HQPLAYER_RATE_COMMAND", "HQPlayer rate command");
     await ask(rl, values, "HQPLAYER_SIGNAL_PATH_PREFIX", "HQPlayer signal path fallback/prefix");
     await ask(rl, values, "ALBUM_ART_PUBLIC_BASE_URL", "Public album art URL");
+    await ask(rl, values, "BRIDGE_USERNAME", "Public bridge username, used in /now/u/username");
+    await ask(rl, values, "BRIDGE_BRAND_NAME", "Public bridge brand text");
 
     const useDiscogs = await askYesNo(rl, values, "DISCOGS_LOOKUP", "Enable Discogs artwork lookup?");
     if (useDiscogs) {
@@ -132,6 +138,7 @@ async function main() {
     const useTidal = await askYesNo(rl, values, "TIDAL_BUTTON_ENABLED", "Enable Play on TIDAL button?");
     if (useTidal) {
       await ask(rl, values, "TIDAL_BUTTON_LABEL", "TIDAL button label");
+      await ask(rl, values, "TIDAL_BUTTON_OPEN_MODE", "TIDAL button open mode");
       await ask(rl, values, "TIDAL_SEARCH_BASE_URL", "TIDAL search base URL");
     }
 
@@ -147,6 +154,7 @@ async function main() {
       await ask(rl, values, "LASTFM_API_KEY", "Last.fm API key", { secret: true });
       await ask(rl, values, "LASTFM_API_SECRET", "Last.fm shared secret", { secret: true });
       await ask(rl, values, "LASTFM_SESSION_KEY", "Last.fm session key", { secret: true });
+      await ask(rl, values, "LASTFM_SCROBBLE_COOLDOWN_MS", "Last.fm duplicate scrobble cooldown ms");
     }
 
     fs.writeFileSync(ENV_PATH, serializeEnv(values));

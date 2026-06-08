@@ -255,7 +255,11 @@ test("album art proxy ingests manual TIDAL metadata and redirects to clean URL",
 
 test("album art proxy serves manual TIDAL landing page UI from clean track URL", async () => {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "roonpresence-tidal-"));
-  const proxy = new AlbumArtProxy({ publicBaseUrl: "https://art.example.com", cacheDir });
+  const proxy = new AlbumArtProxy({
+    publicBaseUrl: "https://art.example.com",
+    cacheDir,
+    bridgeBrandName: "darthspader.com"
+  });
   proxy.rememberTidalBridgeMetadata("12345", {
     title: "Unfolding",
     artist: "Eric Olivier Mario",
@@ -361,7 +365,8 @@ test("album art proxy serves manual TIDAL landing page UI from clean track URL",
 test("album art proxy manual TIDAL page falls back to plain black background without artwork", async () => {
   const proxy = new AlbumArtProxy({
     publicBaseUrl: "https://art.example.com",
-    cacheDir: fs.mkdtempSync(path.join(os.tmpdir(), "roonpresence-tidal-"))
+    cacheDir: fs.mkdtempSync(path.join(os.tmpdir(), "roonpresence-tidal-")),
+    bridgeBrandName: "darthspader.com"
   });
   const chunks = [];
   const response = {
@@ -389,7 +394,7 @@ test("album art proxy manual TIDAL page falls back to plain black background wit
 
 test("album art proxy persists TIDAL bridge metadata for public shared URLs", async () => {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "roonpresence-tidal-"));
-  const firstProxy = new AlbumArtProxy({ publicBaseUrl: "https://art.example.com", cacheDir });
+  const firstProxy = new AlbumArtProxy({ publicBaseUrl: "https://art.example.com", cacheDir, persistNowPlaying: true });
   const bridgeUrl = firstProxy.getTidalBridgeUrl(
     "https://tidal.com/browse/track/12345",
     "manual",
@@ -401,7 +406,7 @@ test("album art proxy persists TIDAL bridge metadata for public shared URLs", as
     "https://art.example.com/tidal/track/12345"
   );
 
-  const secondProxy = new AlbumArtProxy({ publicBaseUrl: "https://art.example.com", cacheDir });
+  const secondProxy = new AlbumArtProxy({ publicBaseUrl: "https://art.example.com", cacheDir, persistNowPlaying: true });
   const chunks = [];
   const response = {
     headers: null,
@@ -454,7 +459,7 @@ test("album art proxy serves bridge page image assets", async () => {
 
     assert.equal(response.status, 200);
     assert.equal(response.headers["content-type"], "image/png");
-    assert.equal(response.headers["cache-control"], "public, max-age=86400");
+    assert.equal(response.headers["cache-control"], "no-cache");
     assert.equal(Buffer.concat(chunks).length > 0, true);
   }
 });
@@ -472,7 +477,8 @@ test("album art proxy serves personal now playing feed", async () => {
         title: "Cheyenne (Extended Mix)",
         artist: "Trilucid",
         radioStationName: "Progressive House - DI.FM",
-        signalPath: "poly-sinc-gauss-hires-lp, PCM, 768kHz"
+        signalPath: "poly-sinc-gauss-hires-lp, PCM, 768kHz",
+        tidalUrl: "https://tidal.com/browse/track/12345"
       }
     },
     {
@@ -498,12 +504,437 @@ test("album art proxy serves personal now playing feed", async () => {
   const html = Buffer.concat(chunks).toString("utf8");
   assert.equal(response.status, 200);
   assert.equal(response.headers["content-type"], "text/html; charset=utf-8");
+  assert.doesNotMatch(html, /http-equiv="refresh"/);
+  assert.doesNotMatch(html, /Refreshes when the track changes/);
+  assert.match(html, /var stateUrl="\/now-state"/);
+  assert.match(html, /fetch\(stateUrl,\{cache:'no-store'\}\)/);
+  assert.match(html, /setInterval\(check,2000\)/);
+  assert.match(html, /name="twitter:card" content="summary_large_image"/);
+  assert.match(html, /name="twitter:title" content="RoonPresence Now Playing"/);
+  assert.match(html, /name="twitter:description" content="Cheyenne \(Extended Mix\) — Trilucid"/);
+  assert.match(html, /property="og:title" content="RoonPresence Now Playing"/);
+  assert.match(html, /property="og:description" content="Cheyenne \(Extended Mix\) — Trilucid"/);
+  assert.match(html, /property="og:type" content="website"/);
+  assert.match(html, /property="og:url" content="https:\/\/art\.example\.com\/now"/);
+  assert.match(html, /property="og:image" content="https:\/\/art\.example\.com\/og\/now\.png\?v=[a-f0-9]{12}"/);
+  assert.match(html, /name="twitter:image" content="https:\/\/art\.example\.com\/og\/now\.png\?v=[a-f0-9]{12}"/);
   assert.match(html, /Now Playing/);
   assert.match(html, /Cheyenne \(Extended Mix\)/);
   assert.match(html, /Trilucid/);
   assert.match(html, /poly-sinc-gauss-hires-lp, PCM, 768kHz/);
   assert.match(html, /https:\/\/art\.example\.com\/art\/cover\.jpg/);
   assert.match(html, /https:\/\/art\.example\.com\/tidal\/track\/12345/);
+  assert.match(html, /href="https:\/\/tidal\.com\/browse\/track\/12345">Play on TIDAL/);
+  assert.match(html, /https:\/\/www\.google\.com\/search\?q=site%3Amusic\.apple\.com%20Cheyenne%20\(Extended%20Mix\)%20Trilucid/);
   assert.match(html, /Recently Played/);
+  assert.match(html, /Recent tracks will appear here/);
+});
+
+test("album art proxy serves namespaced now playing feed for configured bridge user", async () => {
+  const proxy = new AlbumArtProxy({
+    publicBaseUrl: "https://art.example.com",
+    bridgeUsername: "Darth Spader",
+    bridgeBrandName: "darthspader.com"
+  });
+  proxy.updateNowPlaying(
+    {
+      timestampMode: "RADIO",
+      activity: {
+        details: "Cheyenne (Extended Mix)",
+        state: "poly-sinc-gauss-hires-lp, PCM, 768kHz"
+      },
+      metadata: {
+        title: "Cheyenne (Extended Mix)",
+        artist: "Trilucid",
+        radioStationName: "Progressive House - DI.FM",
+        signalPath: "poly-sinc-gauss-hires-lp, PCM, 768kHz",
+        tidalUrl: "https://tidal.com/browse/track/12345"
+      }
+    },
+    {
+      largeImageKey: "https://art.example.com/art/cover.jpg",
+      buttons: [{ label: "Play on TIDAL", url: "https://art.example.com/tidal/track/12345" }]
+    }
+  );
+
+  const chunks = [];
+  const response = {
+    headers: null,
+    writeHead(status, headers) {
+      this.status = status;
+      this.headers = headers;
+    },
+    end(chunk) {
+      if (chunk) chunks.push(Buffer.from(chunk));
+    }
+  };
+
+  await proxy.handleRequest({ url: "/now/u/darth-spader" }, response);
+
+  const html = Buffer.concat(chunks).toString("utf8");
+  assert.equal(response.status, 200);
+  assert.match(html, /<title>darthspader\.com Now Playing<\/title>/);
+  assert.match(html, /property="og:url" content="https:\/\/art\.example\.com\/now\/u\/darth-spader"/);
+  assert.match(html, /property="og:image" content="https:\/\/art\.example\.com\/og\/now\/u\/darth-spader\.png\?v=[a-f0-9]{12}"/);
+  assert.match(html, /var stateUrl="\/now-state\/u\/darth-spader"/);
+  assert.match(html, /Cheyenne \(Extended Mix\)/);
+  assert.match(html, /Trilucid/);
+});
+
+test("album art proxy rejects unknown namespaced now playing users", async () => {
+  const proxy = new AlbumArtProxy({
+    publicBaseUrl: "https://art.example.com",
+    bridgeUsername: "darthspader"
+  });
+  const chunks = [];
+  const response = {
+    headers: null,
+    writeHead(status, headers) {
+      this.status = status;
+      this.headers = headers;
+    },
+    end(chunk) {
+      if (chunk) chunks.push(Buffer.from(chunk));
+    }
+  };
+
+  await proxy.handleRequest({ url: "/now/u/someone-else" }, response);
+
+  const html = Buffer.concat(chunks).toString("utf8");
+  assert.equal(response.status, 404);
+  assert.match(html, /Bridge user not found/);
+});
+
+test("album art proxy accepts namespaced now playing URL when no bridge user is configured", async () => {
+  const proxy = new AlbumArtProxy({ publicBaseUrl: "https://art.example.com" });
+  proxy.updateNowPlaying(
+    {
+      timestampMode: "RADIO",
+      activity: { details: "Your Calling (Extended Mix)", state: "poly-sinc-gauss-hires-lp, PCM, 768kHz" },
+      metadata: { title: "Your Calling (Extended Mix)", artist: "Onawa" }
+    },
+    {
+      largeImageKey: "https://art.example.com/art/cover.jpg",
+      buttons: [{ label: "Play on TIDAL", url: "https://art.example.com/tidal/track/12345" }]
+    }
+  );
+
+  const chunks = [];
+  const response = {
+    headers: null,
+    writeHead(status, headers) {
+      this.status = status;
+      this.headers = headers;
+    },
+    end(chunk) {
+      if (chunk) chunks.push(Buffer.from(chunk));
+    }
+  };
+
+  await proxy.handleRequest({ url: "/now/u/darthspader" }, response);
+
+  const html = Buffer.concat(chunks).toString("utf8");
+  assert.equal(response.status, 200);
+  assert.match(html, /property="og:url" content="https:\/\/art\.example\.com\/now\/u\/darthspader"/);
+  assert.match(html, /property="og:image" content="https:\/\/art\.example\.com\/og\/now\/u\/darthspader\.png\?v=[a-f0-9]{12}"/);
+  assert.match(html, /var stateUrl="\/now-state\/u\/darthspader"/);
+  assert.match(html, /Your Calling \(Extended Mix\)/);
+});
+
+test("now playing feed uses app fallback artwork when Discord activity has no public artwork", async () => {
+  const proxy = new AlbumArtProxy({ publicBaseUrl: "https://art.example.com" });
+  proxy.updateNowPlaying(
+    {
+      timestampMode: "RADIO",
+      activity: {
+        details: "Progressive -DI.FM",
+        state: "poly-sinc-gauss-hires-lp, PCM, 768kHz"
+      },
+      metadata: {
+        title: "Progressive -DI.FM",
+        artist: "DI.FM's Top 30 Progressive House Tracks Of 2025",
+        radioStationName: "Progressive House - DI.FM",
+        signalPath: "poly-sinc-gauss-hires-lp, PCM, 768kHz"
+      }
+    },
+    {
+      largeImageKey: "roonpresence",
+      buttons: [{ label: "Play on TIDAL", url: "https://art.example.com/tidal/track/12345" }]
+    }
+  );
+
+  const chunks = [];
+  const response = {
+    headers: null,
+    writeHead(status, headers) {
+      this.status = status;
+      this.headers = headers;
+    },
+    end(chunk) {
+      if (chunk) chunks.push(Buffer.from(chunk));
+    }
+  };
+
+  await proxy.handleRequest({ url: "/now" }, response);
+
+  const html = Buffer.concat(chunks).toString("utf8");
+  assert.equal(response.status, 200);
+  assert.match(html, /<img class="bg" src="\/assets\/radio-fallback\.png"/);
+  assert.match(html, /<img class="cover" src="\/assets\/radio-fallback\.png" alt="Album art">/);
+  assert.doesNotMatch(html, /<div class="cover empty">RoonPresence<\/div>/);
+});
+
+test("album art proxy serves dynamic now playing OG image endpoint", async () => {
+  const proxy = new AlbumArtProxy({ publicBaseUrl: "https://art.example.com" });
+  proxy.updateNowPlaying(
+    {
+      timestampMode: "RADIO",
+      activity: {
+        details: "Cheyenne (Extended Mix)",
+        state: "poly-sinc-gauss-hires-lp, PCM, 768kHz"
+      },
+      metadata: {
+        title: "Cheyenne (Extended Mix)",
+        artist: "Trilucid"
+      }
+    },
+    {
+      largeImageKey: "roonpresence",
+      buttons: [{ label: "Play on TIDAL", url: "https://art.example.com/tidal/track/12345" }]
+    }
+  );
+
+  const chunks = [];
+  const response = {
+    headers: null,
+    writeHead(status, headers) {
+      this.status = status;
+      this.headers = headers;
+    },
+    end(chunk) {
+      if (chunk) chunks.push(Buffer.from(chunk));
+    }
+  };
+
+  await proxy.handleRequest({ url: "/og/now.png" }, response);
+
+  const image = Buffer.concat(chunks);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers["content-type"], "image/png");
+  assert.equal(response.headers["cache-control"], "no-store");
+  assert.deepEqual([...image.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  assert.equal(image.readUInt32BE(16), 1200);
+  assert.equal(image.readUInt32BE(20), 630);
+});
+
+test("album art proxy derives one-shot TIDAL URL for now page from bridge button", async () => {
+  const proxy = new AlbumArtProxy({ publicBaseUrl: "https://art.example.com" });
+  proxy.updateNowPlaying(
+    {
+      timestampMode: "RADIO",
+      activity: {
+        details: "Cheyenne (Extended Mix)",
+        state: "poly-sinc-gauss-hires-lp, PCM, 768kHz"
+      },
+      metadata: {
+        title: "Cheyenne (Extended Mix)",
+        artist: "Trilucid"
+      }
+    },
+    {
+      largeImageKey: "https://art.example.com/art/cover.jpg",
+      buttons: [{ label: "Play on TIDAL", url: "https://art.example.com/tidal/track/12345" }]
+    }
+  );
+
+  assert.equal(proxy.nowPlaying.bridgeUrl, "https://art.example.com/tidal/track/12345");
+  assert.equal(proxy.nowPlaying.tidalUrl, "https://tidal.com/browse/track/12345");
+
+  const chunks = [];
+  const response = {
+    headers: null,
+    writeHead(status, headers) {
+      this.status = status;
+      this.headers = headers;
+    },
+    end(chunk) {
+      if (chunk) chunks.push(Buffer.from(chunk));
+    }
+  };
+
+  await proxy.handleRequest({ url: "/now" }, response);
+
+  const html = Buffer.concat(chunks).toString("utf8");
+  assert.equal(response.status, 200);
+  assert.match(html, /href="https:\/\/tidal\.com\/browse\/track\/12345">Play on TIDAL/);
+});
+
+test("album art proxy only moves finished tracks into recent history", async () => {
+  const proxy = new AlbumArtProxy({ publicBaseUrl: "https://art.example.com" });
+  const presence = {
+    timestampMode: "RADIO",
+    activity: {
+      details: "Cheyenne (Extended Mix)",
+      state: "poly-sinc-gauss-hires-lp, PCM, 768kHz"
+    },
+    metadata: {
+      title: "Cheyenne (Extended Mix)",
+      artist: "Trilucid",
+      radioStationName: "Progressive House - DI.FM",
+      signalPath: "poly-sinc-gauss-hires-lp, PCM, 768kHz"
+    }
+  };
+
+  proxy.updateNowPlaying(presence, {
+    largeImageKey: "roonpresence",
+    buttons: [{ label: "Play on TIDAL", url: "https://art.example.com/tidal/track/12345" }]
+  });
+  proxy.updateNowPlaying(presence, {
+    largeImageKey: "https://art.example.com/art/cover.jpg",
+    buttons: [{ label: "Play on TIDAL", url: "https://art.example.com/tidal/track/12345" }]
+  });
+
+  assert.equal(proxy.nowHistory.length, 0);
+
+  proxy.updateNowPlaying(
+    {
+      timestampMode: "RADIO",
+      activity: {
+        details: "New Dawn (Extended Mix)",
+        state: "poly-sinc-gauss-hires-lp, PCM, 768kHz"
+      },
+      metadata: {
+        title: "New Dawn (Extended Mix)",
+        artist: "Sean & Dee",
+        radioStationName: "Progressive House - DI.FM",
+        signalPath: "poly-sinc-gauss-hires-lp, PCM, 768kHz"
+      }
+    },
+    {
+      largeImageKey: "https://art.example.com/art/new-dawn.jpg",
+      buttons: [{ label: "Play on TIDAL", url: "https://art.example.com/tidal/track/67890" }]
+    }
+  );
+
+  assert.equal(proxy.nowHistory.length, 1);
+  assert.equal(proxy.nowHistory[0].title, "Cheyenne (Extended Mix)");
+  assert.equal(proxy.nowHistory[0].albumArtUrl, "https://art.example.com/art/cover.jpg");
+
+  const chunks = [];
+  const response = {
+    headers: null,
+    writeHead(status, headers) {
+      this.status = status;
+      this.headers = headers;
+    },
+    end(chunk) {
+      if (chunk) chunks.push(Buffer.from(chunk));
+    }
+  };
+
+  await proxy.handleRequest({ url: "/now" }, response);
+
+  const html = Buffer.concat(chunks).toString("utf8");
+  assert.equal(response.status, 200);
+  assert.match(html, /<img src="https:\/\/art\.example\.com\/art\/cover\.jpg" alt="">/);
+  assert.match(html, /Cheyenne \(Extended Mix\)/);
+  assert.match(html, /New Dawn \(Extended Mix\)/);
+});
+
+test("album art proxy persists now playing state and history across restarts", () => {
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "roonpresence-now-"));
+  const firstProxy = new AlbumArtProxy({
+    publicBaseUrl: "https://art.example.com",
+    cacheDir,
+    persistNowPlaying: true
+  });
+
+  firstProxy.updateNowPlaying(
+    {
+      timestampMode: "RADIO",
+      activity: {
+        details: "Cheyenne (Extended Mix)",
+        state: "poly-sinc-gauss-hires-lp, PCM, 768kHz"
+      },
+      metadata: {
+        title: "Cheyenne (Extended Mix)",
+        artist: "Trilucid",
+        radioStationName: "Progressive House - DI.FM",
+        signalPath: "poly-sinc-gauss-hires-lp, PCM, 768kHz"
+      }
+    },
+    {
+      largeImageKey: "https://art.example.com/art/cheyenne.jpg",
+      buttons: [{ label: "Play on TIDAL", url: "https://art.example.com/tidal/track/12345" }]
+    }
+  );
+  firstProxy.updateNowPlaying(
+    {
+      timestampMode: "RADIO",
+      activity: {
+        details: "New Dawn (Extended Mix)",
+        state: "poly-sinc-gauss-hires-lp, PCM, 768kHz"
+      },
+      metadata: {
+        title: "New Dawn (Extended Mix)",
+        artist: "Sean & Dee",
+        radioStationName: "Progressive House - DI.FM",
+        signalPath: "poly-sinc-gauss-hires-lp, PCM, 768kHz"
+      }
+    },
+    {
+      largeImageKey: "https://art.example.com/art/new-dawn.jpg",
+      buttons: [{ label: "Play on TIDAL", url: "https://art.example.com/tidal/track/67890" }]
+    }
+  );
+
+  const secondProxy = new AlbumArtProxy({
+    publicBaseUrl: "https://art.example.com",
+    cacheDir,
+    persistNowPlaying: true
+  });
+
+  assert.equal(secondProxy.nowPlaying.title, "New Dawn (Extended Mix)");
+  assert.equal(secondProxy.nowPlaying.artist, "Sean & Dee");
+  assert.equal(secondProxy.nowPlaying.albumArtUrl, "https://art.example.com/art/new-dawn.jpg");
+  assert.equal(secondProxy.nowPlaying.tidalUrl, "https://tidal.com/browse/track/67890");
+  assert.equal(secondProxy.nowHistory.length, 1);
+  assert.equal(secondProxy.nowHistory[0].title, "Cheyenne (Extended Mix)");
+  assert.equal(secondProxy.nowHistory[0].bridgeUrl, "https://art.example.com/tidal/track/12345");
+});
+
+test("album art proxy exposes now playing version for change refresh", async () => {
+  const proxy = new AlbumArtProxy({ publicBaseUrl: "https://art.example.com" });
+  proxy.updateNowPlaying(
+    {
+      timestampMode: "RADIO",
+      activity: { details: "Cheyenne (Extended Mix)", state: "poly-sinc-gauss-hires-lp, PCM, 768kHz" },
+      metadata: { title: "Cheyenne (Extended Mix)", artist: "Trilucid" }
+    },
+    {
+      largeImageKey: "https://art.example.com/art/cover.jpg",
+      buttons: [{ label: "Play on TIDAL", url: "https://art.example.com/tidal/track/12345" }]
+    }
+  );
+
+  const chunks = [];
+  const response = {
+    headers: null,
+    writeHead(status, headers) {
+      this.status = status;
+      this.headers = headers;
+    },
+    end(chunk) {
+      if (chunk) chunks.push(Buffer.from(chunk));
+    }
+  };
+
+  await proxy.handleRequest({ url: "/now-state" }, response);
+
+  const state = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  assert.equal(response.status, 200);
+  assert.equal(response.headers["content-type"], "application/json; charset=utf-8");
+  assert.match(state.version, /trilucid\|cheyenne \(extended mix\)/);
+  assert.equal(state.updatedAt > 0, true);
 });
 

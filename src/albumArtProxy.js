@@ -3,21 +3,41 @@ const fs = require("fs");
 const http = require("http");
 const https = require("https");
 const path = require("path");
+const zlib = require("zlib");
 
 const DEFAULT_ALBUM_ART_PROXY_PORT = 8787;
 const DEFAULT_ALBUM_ART_CACHE_MAX = 40;
+const DEFAULT_NOW_ART_PATH = "/assets/radio-fallback.png";
 const ASSET_PATHS = {
   "/assets/tidal-logo.png": path.join(__dirname, "..", "assets", "tidal-logo.png"),
   "/assets/spotify-full-logo.png": path.join(__dirname, "..", "assets", "spotify-full-logo.png"),
-  "/assets/apple-music-logo.png": path.join(__dirname, "..", "assets", "apple-music-logo.png")
+  "/assets/apple-music-logo.png": path.join(__dirname, "..", "assets", "apple-music-logo.png"),
+  [DEFAULT_NOW_ART_PATH]: path.join(__dirname, "..", "assets", "radio-fallback.png")
 };
 const DEFAULT_CACHE_DIR = path.join(__dirname, "..", ".cache");
 const TIDAL_BRIDGE_CACHE_FILE = "tidal-bridge-cache.json";
+const NOW_PLAYING_CACHE_FILE = "now-playing-cache.json";
 const assetBuffers = new Map();
 const DEFAULT_NOW_HISTORY_MAX = 25;
+const OG_IMAGE_WIDTH = 1200;
+const OG_IMAGE_HEIGHT = 630;
+let sharpModule;
 
 function trimTrailingSlash(value) {
   return String(value || "").replace(/\/+$/, "");
+}
+
+function cleanUserSlug(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+}
+
+function cleanBrandName(value) {
+  return cleanBridgeText(value, 80) || "RoonPresence";
 }
 
 function isUsablePublicBaseUrl(value) {
@@ -26,6 +46,16 @@ function isUsablePublicBaseUrl(value) {
 
 function isHttpUrl(value) {
   return /^https?:\/\//i.test(String(value || ""));
+}
+
+function getSharp() {
+  if (sharpModule !== undefined) return sharpModule;
+  try {
+    sharpModule = require("sharp");
+  } catch {
+    sharpModule = null;
+  }
+  return sharpModule;
 }
 
 function cleanBridgeText(value, maxLength = 160) {
@@ -47,6 +77,16 @@ function createBridgeQuery({ albumArtUrl = "", title = "", artist = "" } = {}) {
 function getTidalTrackId(value) {
   const match = String(value || "").match(/^https?:\/\/(?:www\.)?(?:listen\.)?tidal\.com\/(?:browse\/)?track\/(\d+)/i);
   return match ? match[1] : "";
+}
+
+function getTidalBridgeTrackId(value) {
+  const match = String(value || "").match(/^https?:\/\/[^/]+\/tidal\/(?:track|manual|intent|app)\/(\d+)/i);
+  return match ? match[1] : "";
+}
+
+function createTidalTrackUrl(trackId) {
+  const id = String(trackId || "").replace(/\D/g, "");
+  return id ? "https://tidal.com/browse/track/" + id : "";
 }
 
 function createTidalAndroidIntent(trackId, fallbackUrl = "") {
@@ -72,6 +112,84 @@ function htmlEscape(value) {
     .replace(/"/g, "&quot;");
 }
 
+function xmlEscape(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function wrapText(value, maxChars, maxLines) {
+  const words = cleanBridgeText(value, 240).split(" ").filter(Boolean);
+  const lines = [];
+  let line = "";
+  for (const word of words) {
+    const next = line ? `${line} ${word}` : word;
+    if (next.length > maxChars && line) {
+      lines.push(line);
+      line = word;
+      if (lines.length >= maxLines) break;
+    } else {
+      line = next;
+    }
+  }
+  if (line && lines.length < maxLines) lines.push(line);
+  return lines.length ? lines : [""];
+}
+
+function crc32(buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type, data) {
+  const typeBuffer = Buffer.from(type, "ascii");
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length, 0);
+  const checksum = Buffer.alloc(4);
+  checksum.writeUInt32BE(crc32(Buffer.concat([typeBuffer, data])), 0);
+  return Buffer.concat([length, typeBuffer, data, checksum]);
+}
+
+function createFallbackPng(width = OG_IMAGE_WIDTH, height = OG_IMAGE_HEIGHT) {
+  const raw = Buffer.alloc((width * 4 + 1) * height);
+  for (let y = 0; y < height; y += 1) {
+    const row = y * (width * 4 + 1);
+    raw[row] = 0;
+    for (let x = 0; x < width; x += 1) {
+      const offset = row + 1 + x * 4;
+      const glow = Math.max(0, 1 - Math.hypot((x - width * 0.28) / width, (y - height * 0.28) / height) * 2.8);
+      raw[offset] = Math.round(8 + glow * 54);
+      raw[offset + 1] = Math.round(9 + glow * 36);
+      raw[offset + 2] = Math.round(13 + glow * 72);
+      raw[offset + 3] = 255;
+    }
+  }
+
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", zlib.deflateSync(raw)),
+    pngChunk("IEND", Buffer.alloc(0))
+  ]);
+}
+
 function formatNowTime(value) {
   if (!Number.isFinite(value)) return "";
   return new Date(value).toLocaleTimeString("en-US", {
@@ -80,8 +198,40 @@ function formatNowTime(value) {
   });
 }
 
+function mergeNowHistoryItem(existing = {}, next = {}) {
+  return {
+    ...existing,
+    ...next,
+    albumArtUrl: next.albumArtUrl || existing.albumArtUrl || "",
+    bridgeUrl: next.bridgeUrl || existing.bridgeUrl || "",
+    tidalUrl: next.tidalUrl || existing.tidalUrl || "",
+    radioStationName: next.radioStationName || existing.radioStationName || "",
+    signalPath: next.signalPath || existing.signalPath || "",
+    album: next.album || existing.album || ""
+  };
+}
+
 function normalizeNowKey(title = "", artist = "") {
   return `${cleanBridgeText(artist).toLowerCase()}|${cleanBridgeText(title).toLowerCase()}`;
+}
+
+function getNowVersion(nowPlaying = null) {
+  if (!nowPlaying) return "idle";
+  return [
+    normalizeNowKey(nowPlaying.title, nowPlaying.artist),
+    cleanBridgeText(nowPlaying.albumArtUrl),
+    cleanBridgeText(nowPlaying.bridgeUrl),
+    cleanBridgeText(nowPlaying.signalPath || nowPlaying.radioStationName || nowPlaying.album)
+  ].join("|");
+}
+
+function getNowPreviewVersion(nowPlaying = null) {
+  if (!nowPlaying) return "idle";
+  return crypto
+    .createHash("sha1")
+    .update(getNowVersion(nowPlaying))
+    .digest("hex")
+    .slice(0, 12);
 }
 
 function getAssetBuffer(assetPath) {
@@ -89,6 +239,10 @@ function getAssetBuffer(assetPath) {
     assetBuffers.set(assetPath, fs.readFileSync(assetPath));
   }
   return assetBuffers.get(assetPath);
+}
+
+function getAssetContentType(assetPath) {
+  return /\.svg$/i.test(assetPath) ? "image/svg+xml" : "image/png";
 }
 
 function createMusicSearchQuery(title = "", artist = "") {
@@ -103,6 +257,13 @@ function createSpotifySearchUrl(title = "", artist = "") {
 function createAppleMusicSearchUrl(title = "", artist = "") {
   const query = createMusicSearchQuery(title, artist);
   return query ? "https://music.apple.com/us/search?term=" + encodeURIComponent(query) : "https://music.apple.com/us/search";
+}
+
+function createAppleMusicWebSearchUrl(title = "", artist = "") {
+  const query = createMusicSearchQuery(title, artist);
+  return query
+    ? "https://www.google.com/search?q=" + encodeURIComponent("site:music.apple.com " + query)
+    : "https://www.google.com/search?q=" + encodeURIComponent("Apple Music");
 }
 
 function createSpotifyAndroidSearchIntent(query = "", fallbackUrl = "") {
@@ -130,6 +291,33 @@ function writeJsonFile(filePath, value) {
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
 }
 
+function normalizeNowItem(value = {}) {
+  const title = cleanBridgeText(value.title);
+  if (!title) return null;
+
+  return {
+    title,
+    artist: cleanBridgeText(value.artist),
+    album: cleanBridgeText(value.album),
+    radioStationName: cleanBridgeText(value.radioStationName),
+    signalPath: cleanBridgeText(value.signalPath),
+    timestampMode: cleanBridgeText(value.timestampMode),
+    albumArtUrl: isHttpUrl(value.albumArtUrl) ? String(value.albumArtUrl).trim() : "",
+    tidalUrl: isHttpUrl(value.tidalUrl) ? String(value.tidalUrl).trim() : "",
+    bridgeUrl: isHttpUrl(value.bridgeUrl) ? String(value.bridgeUrl).trim() : "",
+    updatedAt: Number.isFinite(Number(value.updatedAt)) ? Number(value.updatedAt) : Date.now()
+  };
+}
+
+function normalizeNowCache(value = {}, historyMax = DEFAULT_NOW_HISTORY_MAX) {
+  const nowPlaying = normalizeNowItem(value.nowPlaying || {});
+  const history = Array.isArray(value.nowHistory)
+    ? value.nowHistory.map(normalizeNowItem).filter(Boolean).slice(0, historyMax)
+    : [];
+
+  return { nowPlaying, nowHistory: history };
+}
+
 function getRequestPublicUrl(request, parsedUrl) {
   const host = request.headers?.["x-forwarded-host"] || request.headers?.host || "";
   if (!host) return "";
@@ -137,7 +325,7 @@ function getRequestPublicUrl(request, parsedUrl) {
   return `${proto}://${host}${parsedUrl.pathname}${parsedUrl.search}`;
 }
 
-function tidalTrackHtml(trackId, albumArtUrl = "", { title = "", artist = "", pageUrl = "", shareUrl = "" } = {}) {
+function tidalTrackHtml(trackId, albumArtUrl = "", { title = "", artist = "", pageUrl = "", shareUrl = "", brandName = "darthspader.com" } = {}) {
   const id = htmlEscape(trackId);
   const cleanAlbumArtUrl = isHttpUrl(albumArtUrl) ? String(albumArtUrl).trim() : "";
   const cleanTitle = cleanBridgeText(title);
@@ -164,7 +352,7 @@ function tidalTrackHtml(trackId, albumArtUrl = "", { title = "", artist = "", pa
   const metaHtml =
     "<link rel=\"canonical\" href=\"" + htmlEscape(cleanShareUrl) + "\">" +
     "<meta property=\"og:type\" content=\"music.song\">" +
-    "<meta property=\"og:site_name\" content=\"darthspader.com\">" +
+    "<meta property=\"og:site_name\" content=\"" + htmlEscape(brandName) + "\">" +
     "<meta property=\"og:title\" content=\"" + htmlEscape(pageTitle) + "\">" +
     "<meta property=\"og:description\" content=\"" + htmlEscape(pageDescription) + "\">" +
     "<meta property=\"og:url\" content=\"" + htmlEscape(metaUrl) + "\">" +
@@ -173,7 +361,7 @@ function tidalTrackHtml(trackId, albumArtUrl = "", { title = "", artist = "", pa
     "<meta name=\"twitter:title\" content=\"" + htmlEscape(pageTitle) + "\">" +
     "<meta name=\"twitter:description\" content=\"" + htmlEscape(pageDescription) + "\">" +
     (metaImage ? "<meta name=\"twitter:image\" content=\"" + htmlEscape(metaImage) + "\">" : "");
-  const brandHtml = "<header class=\"brand\"><div class=\"brand-word\">darthspader.com</div></header>";
+  const brandHtml = "<header class=\"brand\"><div class=\"brand-word\">" + htmlEscape(brandName) + "</div></header>";
   const tidalLogoHtml = "<img class=\"tidal-logo\" src=\"/assets/tidal-logo.png\" alt=\"TIDAL\">";
   const musicSearchQuery = createMusicSearchQuery(cleanTitle, cleanArtist);
   const spotifySearchUrl = createSpotifySearchUrl(cleanTitle, cleanArtist);
@@ -202,16 +390,74 @@ function tidalTrackHtml(trackId, albumArtUrl = "", { title = "", artist = "", pa
     "</main></body></html>";
 }
 
-function nowPlayingHtml(nowPlaying = null, history = []) {
+function createNowDescription(nowPlaying = null, brandName = "RoonPresence") {
+  const title = cleanBridgeText(nowPlaying?.title || "");
+  const artist = cleanBridgeText(nowPlaying?.artist || "");
+  if (title && artist) return `${title} — ${artist}`;
+  if (title) return title;
+  return "Live now playing from " + brandName;
+}
+
+async function createNowOgImage(nowPlaying = null, fetchImage = fetchBuffer, { brandName = "darthspader.com" } = {}) {
+  const sharp = getSharp();
+  if (!sharp) return createFallbackPng();
+
+  const title = cleanBridgeText(nowPlaying?.title || "Nothing Playing", 110);
+  const artist = cleanBridgeText(nowPlaying?.artist || "Darthspader", 90);
+  const artUrl = isHttpUrl(nowPlaying?.albumArtUrl) ? nowPlaying.albumArtUrl : "";
+  let artBuffer = getAssetBuffer(ASSET_PATHS[DEFAULT_NOW_ART_PATH]);
+  if (artUrl) {
+    try {
+      artBuffer = await fetchImage(artUrl);
+    } catch {
+      artBuffer = getAssetBuffer(ASSET_PATHS[DEFAULT_NOW_ART_PATH]);
+    }
+  }
+  const titleLines = wrapText(title, title.length > 36 ? 20 : 22, 3);
+  const titleFontSize = titleLines.length > 2 ? 40 : title.length > 42 ? 44 : 50;
+  const titleLineStep = titleLines.length > 2 ? 48 : 56;
+  const titleStartY = titleLines.length > 2 ? 274 : 286;
+  const artistY = titleStartY + titleLines.length * titleLineStep + 44;
+  const titleSvg = titleLines.map((line, index) =>
+    `<text x="520" y="${titleStartY + index * titleLineStep}" font-size="${titleFontSize}" font-weight="850" fill="#ffffff">${xmlEscape(line)}</text>`
+  ).join("");
+  const overlaySvg = Buffer.from(
+    `<svg width="${OG_IMAGE_WIDTH}" height="${OG_IMAGE_HEIGHT}" xmlns="http://www.w3.org/2000/svg">
+      <rect width="1200" height="630" fill="rgba(0,0,0,0.46)"/>
+      <rect x="70" y="70" width="1060" height="490" rx="42" fill="rgba(10,10,14,0.68)" stroke="rgba(255,255,255,0.14)" stroke-width="2"/>
+      <text x="520" y="186" font-size="28" font-weight="800" letter-spacing="5" fill="rgba(190,205,255,0.82)">${xmlEscape(brandName)}</text>
+      <text x="520" y="230" font-size="28" font-weight="800" letter-spacing="4" fill="rgba(255,255,255,0.58)">NOW PLAYING</text>
+      ${titleSvg}
+      <text x="520" y="${artistY}" font-size="38" font-weight="600" fill="rgba(255,255,255,0.70)">${xmlEscape(artist)}</text>
+    </svg>`
+  );
+
+  const background = await sharp(artBuffer).resize(OG_IMAGE_WIDTH, OG_IMAGE_HEIGHT, { fit: "cover" }).blur(26).modulate({ brightness: 0.74 }).png().toBuffer();
+  const composites = [{ input: overlaySvg, top: 0, left: 0 }];
+
+  const coverMask = Buffer.from(`<svg width="380" height="380"><rect width="380" height="380" rx="34" fill="#fff"/></svg>`);
+  const cover = await sharp(artBuffer)
+    .resize(380, 380, { fit: "cover" })
+    .composite([{ input: coverMask, blend: "dest-in" }])
+    .png()
+    .toBuffer();
+  composites.push({ input: cover, top: 125, left: 105 });
+
+  return sharp(background).composite(composites).png().toBuffer();
+}
+
+function nowPlayingHtml(nowPlaying = null, history = [], { previewImageUrl = "", pageUrl = "", brandName = "darthspader.com", stateUrl = "/now-state" } = {}) {
   const current = nowPlaying || {};
+  const version = getNowVersion(nowPlaying);
   const title = cleanBridgeText(current.title || "Nothing Playing");
   const artist = cleanBridgeText(current.artist || "");
+  const description = createNowDescription(nowPlaying, brandName);
   const subtitle = cleanBridgeText(current.signalPath || current.radioStationName || current.album || "");
-  const artUrl = isHttpUrl(current.albumArtUrl) ? current.albumArtUrl : "";
+  const artUrl = isHttpUrl(current.albumArtUrl) ? current.albumArtUrl : DEFAULT_NOW_ART_PATH;
   const bridgeUrl = isHttpUrl(current.bridgeUrl) ? current.bridgeUrl : "";
   const tidalUrl = isHttpUrl(current.tidalUrl) ? current.tidalUrl : "";
   const spotifyUrl = createSpotifySearchUrl(title, artist);
-  const appleUrl = createAppleMusicSearchUrl(title, artist);
+  const appleUrl = createAppleMusicWebSearchUrl(title, artist);
   const backgroundHtml = artUrl ? "<img class=\"bg\" src=\"" + htmlEscape(artUrl) + "\" alt=\"\">" : "";
   const coverHtml = artUrl ? "<img class=\"cover\" src=\"" + htmlEscape(artUrl) + "\" alt=\"Album art\">" : "<div class=\"cover empty\">RoonPresence</div>";
   const titleLinkStart = bridgeUrl ? "<a class=\"title-link\" href=\"" + htmlEscape(bridgeUrl) + "\">" : "";
@@ -220,7 +466,8 @@ function nowPlayingHtml(nowPlaying = null, history = []) {
     ? history.map((item) => {
         const itemTitle = htmlEscape(item.title || "Unknown Track");
         const itemArtist = htmlEscape(item.artist || "");
-        const itemArt = isHttpUrl(item.albumArtUrl) ? "<img src=\"" + htmlEscape(item.albumArtUrl) + "\" alt=\"\">" : "<span></span>";
+        const itemArtUrl = isHttpUrl(item.albumArtUrl) ? item.albumArtUrl : DEFAULT_NOW_ART_PATH;
+        const itemArt = "<img src=\"" + htmlEscape(itemArtUrl) + "\" alt=\"\">";
         const itemHref = isHttpUrl(item.bridgeUrl) ? item.bridgeUrl : "";
         const rowStart = itemHref ? "<a class=\"history-row\" href=\"" + htmlEscape(itemHref) + "\">" : "<div class=\"history-row\">";
         const rowEnd = itemHref ? "</a>" : "</div>";
@@ -229,12 +476,19 @@ function nowPlayingHtml(nowPlaying = null, history = []) {
     : "<p class=\"empty-history\">Recent tracks will appear here.</p>";
 
   return "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
-    "<title>RoonPresence Now Playing</title>" +
-    "<meta property=\"og:title\" content=\"" + htmlEscape(title + (artist ? " - " + artist : "")) + "\">" +
-    "<meta property=\"og:site_name\" content=\"darthspader.com\">" +
-    (artUrl ? "<meta property=\"og:image\" content=\"" + htmlEscape(artUrl) + "\">" : "") +
-    "<style>*{box-sizing:border-box}body{margin:0;min-height:100vh;background:#030304;color:#fff;font-family:system-ui,-apple-system,Segoe UI,sans-serif;padding:22px;overflow-x:hidden}.bg{position:fixed;inset:-48px;width:calc(100% + 96px);height:calc(100% + 96px);object-fit:cover;filter:blur(34px);opacity:.30;z-index:-2}body:before{content:\"\";position:fixed;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.52),rgba(0,0,0,.84));z-index:-1}.wrap{width:min(940px,100%);margin:0 auto}.brand{text-align:center;margin:8px 0 22px;font-weight:800;letter-spacing:.26em;color:rgba(190,205,255,.78)}.card{display:grid;grid-template-columns:minmax(170px,300px) 1fr;gap:28px;align-items:center;padding:26px;border:1px solid rgba(255,255,255,.12);border-radius:30px;background:linear-gradient(180deg,rgba(18,18,20,.74),rgba(8,8,10,.64));box-shadow:0 28px 100px rgba(0,0,0,.55);backdrop-filter:blur(18px)}.cover{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:22px;box-shadow:0 24px 70px rgba(0,0,0,.52)}.cover.empty{display:grid;place-items:center;background:#111;color:rgba(255,255,255,.6);font-weight:800}.eyebrow{margin:0 0 8px;color:rgba(255,255,255,.52);font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.12em}.title-link{color:inherit;text-decoration:none}h1{margin:0 auto;text-align:center;text-wrap:balance;font-size:clamp(34px,7vw,64px);line-height:1.02}.artist{margin:14px auto 0;text-align:center;color:rgba(255,255,255,.68);font-size:clamp(22px,4vw,34px)}.subtitle{margin:18px auto 0;text-align:center;color:rgba(255,255,255,.56);font-size:17px;line-height:1.35}.actions{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:12px;margin-top:24px}.actions a{display:flex;align-items:center;justify-content:center;min-height:48px;border-radius:16px;border:1px solid rgba(255,255,255,.14);color:#fff;text-decoration:none;font-weight:850;background:rgba(255,255,255,.06)}.tidal{background:linear-gradient(180deg,#050505,#000)!important}.spotify{background:linear-gradient(180deg,rgba(30,215,96,.30),rgba(30,215,96,.10))!important}.apple{background:linear-gradient(135deg,#87184e,#e2145d 48%,#ff2f4f)!important}.section-title{margin:28px 0 12px;color:rgba(255,255,255,.72)}.history{display:grid;gap:10px}.history-row{display:grid;grid-template-columns:58px 1fr auto;gap:12px;align-items:center;padding:10px;border-radius:16px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.09);color:#fff;text-decoration:none}.history-row img,.history-row span{width:58px;height:58px;border-radius:10px;background:#151515;object-fit:cover}.history-row strong{display:block;font-size:15px}.history-row p{margin:3px 0 0;color:rgba(255,255,255,.56)}.history-row time{color:rgba(255,255,255,.45);font-size:13px}.empty-history{color:rgba(255,255,255,.55)}@media(max-width:720px){body{padding:16px}.card{grid-template-columns:1fr;padding:18px;gap:18px}.cover{width:min(100%,360px);margin:0 auto}.actions{grid-template-columns:1fr}.history-row{grid-template-columns:52px 1fr}.history-row time{display:none}}</style></head>" +
-    "<body>" + backgroundHtml + "<main class=\"wrap\"><div class=\"brand\">darthspader.com</div><section class=\"card\">" + coverHtml + "<div><p class=\"eyebrow\">Now Playing</p>" + titleLinkStart + "<h1>" + htmlEscape(title) + "</h1>" + titleLinkEnd + (artist ? "<p class=\"artist\">" + htmlEscape(artist) + "</p>" : "") + (subtitle ? "<p class=\"subtitle\">" + htmlEscape(subtitle) + "</p>" : "") + "<div class=\"actions\">" + (tidalUrl ? "<a class=\"tidal\" href=\"" + htmlEscape(tidalUrl) + "\">Play on TIDAL</a>" : "") + "<a class=\"spotify\" href=\"" + htmlEscape(spotifyUrl) + "\">Spotify</a><a class=\"apple\" href=\"" + htmlEscape(appleUrl) + "\">Apple Music</a></div></div></section><h2 class=\"section-title\">Recently Played</h2><section class=\"history\">" + historyHtml + "</section></main></body></html>";
+    "<title>" + htmlEscape(brandName) + " Now Playing</title>" +
+    "<meta name=\"twitter:card\" content=\"summary_large_image\">" +
+    "<meta name=\"twitter:title\" content=\"" + htmlEscape(brandName) + " Now Playing\">" +
+    "<meta name=\"twitter:description\" content=\"" + htmlEscape(description) + "\">" +
+    (previewImageUrl ? "<meta name=\"twitter:image\" content=\"" + htmlEscape(previewImageUrl) + "\">" : "") +
+    "<meta property=\"og:title\" content=\"" + htmlEscape(brandName) + " Now Playing\">" +
+    "<meta property=\"og:description\" content=\"" + htmlEscape(description) + "\">" +
+    (previewImageUrl ? "<meta property=\"og:image\" content=\"" + htmlEscape(previewImageUrl) + "\">" : "") +
+    (pageUrl ? "<meta property=\"og:url\" content=\"" + htmlEscape(pageUrl) + "\">" : "") +
+    "<meta property=\"og:type\" content=\"website\">" +
+    "<meta property=\"og:site_name\" content=\"" + htmlEscape(brandName) + "\">" +
+    "<style>*{box-sizing:border-box}body{margin:0;min-height:100vh;background:#030304;color:#fff;font-family:system-ui,-apple-system,Segoe UI,sans-serif;padding:22px;overflow-x:hidden}.bg{position:fixed;inset:-48px;width:calc(100% + 96px);height:calc(100% + 96px);object-fit:cover;filter:blur(34px);opacity:.30;z-index:-2}body:before{content:\"\";position:fixed;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.52),rgba(0,0,0,.84));z-index:-1}.wrap{width:min(940px,100%);margin:0 auto}.brand{text-align:center;margin:8px 0 22px;font-weight:800;letter-spacing:.26em;color:rgba(190,205,255,.78)}.card{display:grid;grid-template-columns:minmax(170px,300px) 1fr;gap:28px;align-items:center;padding:26px;border:1px solid rgba(255,255,255,.12);border-radius:30px;background:linear-gradient(180deg,rgba(18,18,20,.74),rgba(8,8,10,.64));box-shadow:0 28px 100px rgba(0,0,0,.55);backdrop-filter:blur(18px)}.cover{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:22px;box-shadow:0 24px 70px rgba(0,0,0,.52)}.cover.empty{display:grid;place-items:center;background:#111;color:rgba(255,255,255,.6);font-weight:800}.eyebrow{margin:0 0 8px;color:rgba(255,255,255,.52);font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.12em}.refresh-note{margin:0 0 14px;color:rgba(255,255,255,.42);font-size:13px}.title-link{color:inherit;text-decoration:none}h1{margin:0 auto;text-align:center;text-wrap:balance;font-size:clamp(34px,7vw,64px);line-height:1.02}.artist{margin:14px auto 0;text-align:center;color:rgba(255,255,255,.68);font-size:clamp(22px,4vw,34px)}.subtitle{margin:18px auto 0;text-align:center;color:rgba(255,255,255,.56);font-size:17px;line-height:1.35}.actions{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:12px;margin-top:24px}.actions a{display:flex;align-items:center;justify-content:center;min-height:48px;border-radius:16px;border:1px solid rgba(255,255,255,.14);color:#fff;text-decoration:none;font-weight:850;background:rgba(255,255,255,.06)}.tidal{background:linear-gradient(180deg,#050505,#000)!important}.spotify{background:linear-gradient(180deg,rgba(30,215,96,.30),rgba(30,215,96,.10))!important}.apple{background:linear-gradient(135deg,#87184e,#e2145d 48%,#ff2f4f)!important}.section-title{margin:28px 0 12px;color:rgba(255,255,255,.72)}.history{display:grid;gap:10px}.history-row{display:grid;grid-template-columns:58px 1fr auto;gap:12px;align-items:center;padding:10px;border-radius:16px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.09);color:#fff;text-decoration:none}.history-row img,.history-row span{width:58px;height:58px;border-radius:10px;background:#151515;object-fit:cover}.history-row strong{display:block;font-size:15px}.history-row p{margin:3px 0 0;color:rgba(255,255,255,.56)}.history-row time{color:rgba(255,255,255,.45);font-size:13px}.empty-history{color:rgba(255,255,255,.55)}@media(max-width:720px){body{padding:16px}.card{grid-template-columns:1fr;padding:18px;gap:18px}.cover{width:min(100%,360px);margin:0 auto}.actions{grid-template-columns:1fr}.history-row{grid-template-columns:52px 1fr}.history-row time{display:none}}</style></head>" +
+    "<body>" + backgroundHtml + "<main class=\"wrap\"><div class=\"brand\">" + htmlEscape(brandName) + "</div><section class=\"card\">" + coverHtml + "<div><p class=\"eyebrow\">Now Playing</p>" + titleLinkStart + "<h1>" + htmlEscape(title) + "</h1>" + titleLinkEnd + (artist ? "<p class=\"artist\">" + htmlEscape(artist) + "</p>" : "") + (subtitle ? "<p class=\"subtitle\">" + htmlEscape(subtitle) + "</p>" : "") + "<div class=\"actions\">" + (tidalUrl ? "<a class=\"tidal\" href=\"" + htmlEscape(tidalUrl) + "\">Play on TIDAL</a>" : "") + "<a class=\"spotify\" href=\"" + htmlEscape(spotifyUrl) + "\">Spotify</a><a class=\"apple\" href=\"" + htmlEscape(appleUrl) + "\">Apple Music</a></div></div></section><h2 class=\"section-title\">Recently Played</h2><section class=\"history\">" + historyHtml + "</section></main><script>(function(){var current=" + JSON.stringify(version) + ";var stateUrl=" + JSON.stringify(stateUrl) + ";async function check(){try{var response=await fetch(stateUrl,{cache:'no-store'});if(!response.ok)return;var state=await response.json();if(state.version&&state.version!==current){window.location.reload();}}catch(error){}}setInterval(check,2000);})();</script></body></html>";
 }
 
 function fetchBuffer(url, timeoutMs = 10_000, redirectsRemaining = 5) {
@@ -280,19 +534,29 @@ class AlbumArtProxy {
     logger,
     fetchImage = fetchBuffer,
     cacheDir = DEFAULT_CACHE_DIR,
-    nowHistoryMax = DEFAULT_NOW_HISTORY_MAX
+    nowHistoryMax = DEFAULT_NOW_HISTORY_MAX,
+    persistNowPlaying = false,
+    bridgeUsername = "",
+    bridgeBrandName = ""
   } = {}) {
     this.publicBaseUrl = trimTrailingSlash(publicBaseUrl);
     this.port = Number(port) || DEFAULT_ALBUM_ART_PROXY_PORT;
     this.cacheMax = Number(cacheMax) || DEFAULT_ALBUM_ART_CACHE_MAX;
+    this.bridgeUsername = cleanUserSlug(bridgeUsername);
+    this.bridgeBrandName = cleanBrandName(bridgeBrandName || this.bridgeUsername || "RoonPresence");
     this.logger = logger;
     this.fetchImage = fetchImage;
     this.cacheDir = cacheDir;
     this.tidalBridgeCachePath = path.join(this.cacheDir, TIDAL_BRIDGE_CACHE_FILE);
     this.tidalBridgeCache = readJsonFile(this.tidalBridgeCachePath, {});
     this.nowHistoryMax = Number(nowHistoryMax) || DEFAULT_NOW_HISTORY_MAX;
-    this.nowPlaying = null;
-    this.nowHistory = [];
+    this.persistNowPlaying = !!persistNowPlaying;
+    this.nowPlayingCachePath = path.join(this.cacheDir, NOW_PLAYING_CACHE_FILE);
+    const nowCache = this.persistNowPlaying
+      ? normalizeNowCache(readJsonFile(this.nowPlayingCachePath, {}), this.nowHistoryMax)
+      : { nowPlaying: null, nowHistory: [] };
+    this.nowPlaying = nowCache.nowPlaying;
+    this.nowHistory = nowCache.nowHistory;
     this.server = null;
     this.entries = new Map();
   }
@@ -417,6 +681,30 @@ class AlbumArtProxy {
     return this.tidalBridgeCache[String(trackId || "").replace(/\D/g, "")] || {};
   }
 
+  getNowPath() {
+    return this.bridgeUsername ? `/now/u/${this.bridgeUsername}` : "/now";
+  }
+
+  getNowStatePath() {
+    return this.bridgeUsername ? `/now-state/u/${this.bridgeUsername}` : "/now-state";
+  }
+
+  getNowOgPath() {
+    return this.bridgeUsername ? `/og/now/u/${this.bridgeUsername}.png` : "/og/now.png";
+  }
+
+  getPublicNowUrl() {
+    return this.enabled ? `${this.publicBaseUrl}${this.getNowPath()}` : "";
+  }
+
+  saveNowPlayingCache() {
+    if (!this.persistNowPlaying) return;
+    writeJsonFile(this.nowPlayingCachePath, {
+      nowPlaying: this.nowPlaying,
+      nowHistory: this.nowHistory
+    });
+  }
+
   updateNowPlaying(presence, rpcActivity = {}) {
     if (!presence) return false;
 
@@ -429,6 +717,9 @@ class AlbumArtProxy {
       ? rpcActivity.buttons.find((button) => /tidal/i.test(button?.label || "") && isHttpUrl(button?.url || ""))
       : null;
     const bridgeUrl = tidalButton?.url || "";
+    const directTidalUrl =
+      (isHttpUrl(presence.metadata?.tidalUrl) && getTidalTrackId(presence.metadata.tidalUrl) ? presence.metadata.tidalUrl : "") ||
+      createTidalTrackUrl(getTidalBridgeTrackId(bridgeUrl));
     const now = {
       title,
       artist,
@@ -437,26 +728,44 @@ class AlbumArtProxy {
       signalPath: cleanBridgeText(presence.metadata?.signalPath || presence.activity?.state),
       timestampMode: presence.timestampMode || "",
       albumArtUrl,
-      tidalUrl: bridgeUrl,
+      tidalUrl: directTidalUrl || bridgeUrl,
       bridgeUrl,
       updatedAt: Date.now()
     };
     const key = normalizeNowKey(now.title, now.artist);
     const previousKey = this.nowPlaying ? normalizeNowKey(this.nowPlaying.title, this.nowPlaying.artist) : "";
+    const previousNowPlaying = this.nowPlaying;
     this.nowPlaying = now;
 
-    if (key && key !== previousKey) {
+    if (previousKey && key !== previousKey) {
+      const existingHistoryItem = this.nowHistory.find((item) =>
+        normalizeNowKey(item.title, item.artist) === previousKey
+      );
+      const historyItem = mergeNowHistoryItem(existingHistoryItem, previousNowPlaying);
       this.nowHistory = [
-        now,
-        ...this.nowHistory.filter((item) => normalizeNowKey(item.title, item.artist) !== key)
+        historyItem,
+        ...this.nowHistory.filter((item) => normalizeNowKey(item.title, item.artist) !== previousKey)
       ].slice(0, this.nowHistoryMax);
     }
 
+    this.saveNowPlayingCache();
     return true;
   }
 
   clearNowPlaying() {
+    if (this.nowPlaying) {
+      const key = normalizeNowKey(this.nowPlaying.title, this.nowPlaying.artist);
+      if (key) {
+        const existingHistoryItem = this.nowHistory.find((item) => normalizeNowKey(item.title, item.artist) === key);
+        const historyItem = mergeNowHistoryItem(existingHistoryItem, this.nowPlaying);
+        this.nowHistory = [
+          historyItem,
+          ...this.nowHistory.filter((item) => normalizeNowKey(item.title, item.artist) !== key)
+        ].slice(0, this.nowHistoryMax);
+      }
+    }
     this.nowPlaying = null;
+    this.saveNowPlayingCache();
   }
 
   async cachePublicUrl(sourceUrl, imageKey = "") {
@@ -505,8 +814,8 @@ class AlbumArtProxy {
     if (ASSET_PATHS[requestPath]) {
       const logoBuffer = getAssetBuffer(ASSET_PATHS[requestPath]);
       response.writeHead(200, {
-        "content-type": "image/png",
-        "cache-control": "public, max-age=86400",
+        "content-type": getAssetContentType(ASSET_PATHS[requestPath]),
+        "cache-control": "no-cache",
         "content-length": logoBuffer.length
       });
       response.end(logoBuffer);
@@ -576,17 +885,83 @@ class AlbumArtProxy {
         title: finalMetadata.title,
         artist: finalMetadata.artist,
         pageUrl: getRequestPublicUrl(request, parsedUrl) || shareUrl,
-        shareUrl
+        shareUrl,
+        brandName: this.bridgeBrandName
       }));
       return;
     }
 
-    if (requestPath === "/now" || requestPath === "/history") {
+    const nowUserMatch = /^\/now\/u\/([^/]+)$/i.exec(requestPath);
+    const requestedNowUser = nowUserMatch ? cleanUserSlug(nowUserMatch[1]) : "";
+    const nowUserMatches = !!nowUserMatch && !!requestedNowUser && (!this.bridgeUsername || requestedNowUser === this.bridgeUsername);
+    if (nowUserMatch && !nowUserMatches) {
+      response.writeHead(404, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      response.end("<!doctype html><title>Not found</title><body style=\"font-family:system-ui;background:#050507;color:#fff;display:grid;min-height:100vh;place-items:center;margin:0\"><main><h1>Bridge user not found</h1><p>Check the username in the URL.</p></main></body>");
+      return;
+    }
+
+    if (requestPath === "/now" || requestPath === "/history" || nowUserMatches) {
+      const previewVersion = getNowPreviewVersion(this.nowPlaying);
+      const nowPath = nowUserMatches ? `/now/u/${requestedNowUser}` : this.getNowPath();
+      const nowOgPath = nowUserMatches ? `/og/now/u/${requestedNowUser}.png` : this.getNowOgPath();
+      const nowStatePath = nowUserMatches ? `/now-state/u/${requestedNowUser}` : this.getNowStatePath();
+      const previewImageUrl = this.enabled
+        ? `${this.publicBaseUrl}${nowOgPath}?v=${encodeURIComponent(previewVersion)}`
+        : "";
+      const pageUrl = this.enabled ? `${this.publicBaseUrl}${nowPath}` : getRequestPublicUrl(request, parsedUrl);
       response.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store"
       });
-      response.end(nowPlayingHtml(this.nowPlaying, this.nowHistory));
+      response.end(nowPlayingHtml(this.nowPlaying, this.nowHistory, {
+        previewImageUrl,
+        pageUrl,
+        brandName: this.bridgeBrandName,
+        stateUrl: nowStatePath
+      }));
+      return;
+    }
+
+    const nowOgUserMatch = /^\/og\/now\/u\/([^/]+)\.png$/i.exec(requestPath);
+    const requestedNowOgUser = nowOgUserMatch ? cleanUserSlug(nowOgUserMatch[1]) : "";
+    const nowOgUserMatches = !!nowOgUserMatch && !!requestedNowOgUser && (!this.bridgeUsername || requestedNowOgUser === this.bridgeUsername);
+    if (nowOgUserMatch && !nowOgUserMatches) {
+      response.writeHead(404, { "content-type": "text/plain", "cache-control": "no-store" });
+      response.end("bridge user not found");
+      return;
+    }
+
+    if (requestPath === "/og/now.png" || nowOgUserMatches) {
+      const image = await createNowOgImage(this.nowPlaying, this.fetchImage, { brandName: this.bridgeBrandName });
+      response.writeHead(200, {
+        "content-type": "image/png",
+        "cache-control": "no-store",
+        "content-length": image.length
+      });
+      response.end(image);
+      return;
+    }
+
+    const nowStateUserMatch = /^\/now-state\/u\/([^/]+)$/i.exec(requestPath);
+    const requestedNowStateUser = nowStateUserMatch ? cleanUserSlug(nowStateUserMatch[1]) : "";
+    const nowStateUserMatches = !!nowStateUserMatch && !!requestedNowStateUser && (!this.bridgeUsername || requestedNowStateUser === this.bridgeUsername);
+    if (nowStateUserMatch && !nowStateUserMatches) {
+      response.writeHead(404, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      response.end(JSON.stringify({ error: "bridge user not found" }));
+      return;
+    }
+
+    if (requestPath === "/now-state" || nowStateUserMatches) {
+      const body = JSON.stringify({
+        version: getNowVersion(this.nowPlaying),
+        updatedAt: this.nowPlaying?.updatedAt || 0
+      });
+      response.writeHead(200, {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "content-length": Buffer.byteLength(body)
+      });
+      response.end(body);
       return;
     }
 
