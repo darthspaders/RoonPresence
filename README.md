@@ -119,6 +119,29 @@ The setup wizard also asks for a public bridge username and brand name. For exam
 https://art.darthspader.com/now/u/darthspader
 ```
 
+## Public Bridge Account
+
+Each RoonPresence install should have its own bridge username. This is not a hosted login account; it is a public identity slug stored in that user's local `.env` file so their now-playing page and preview images have their own stable URL.
+
+During setup, choose:
+
+```env
+BRIDGE_USERNAME=yourname
+BRIDGE_BRAND_NAME=yourname.com
+```
+
+That creates these public bridge URLs:
+
+```text
+https://your-public-art-domain.example/now/u/yourname
+https://your-public-art-domain.example/og/now/u/yourname.png
+https://your-public-art-domain.example/now-state/u/yourname
+```
+
+Use a simple lowercase username with letters, numbers, dashes, or underscores. RoonPresence will clean the value into a URL-safe slug.
+
+If `BRIDGE_USERNAME` is missing, `/now` still works and `/now/u/<username>` is accepted as a friendly alias. For sharing publicly, set `BRIDGE_USERNAME` so the URL is stable and intentional.
+
 ## GitHub Setup Wizard
 
 Build a setup wizard exe for GitHub Releases:

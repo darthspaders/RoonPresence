@@ -86,6 +86,7 @@ test("album art proxy can prefetch and return cached public URLs", async () => {
   let fetchCount = 0;
   const proxy = new AlbumArtProxy({
     publicBaseUrl: "https://art.example.com",
+    cacheDir: fs.mkdtempSync(path.join(os.tmpdir(), "roonpresence-art-cache-")),
     fetchImage: async (url) => {
       fetchCount += 1;
       assert.equal(url, "https://resources.tidal.com/images/cover.jpg");
@@ -100,6 +101,70 @@ test("album art proxy can prefetch and return cached public URLs", async () => {
   const sameUrl = await proxy.cachePublicUrl("https://resources.tidal.com/images/cover.jpg", "radio:artist|track");
   assert.equal(sameUrl, publicUrl);
   assert.equal(fetchCount, 1);
+});
+
+test("album art proxy serves cached artwork from disk after restart", async () => {
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "roonpresence-art-cache-"));
+  let fetchCount = 0;
+  const firstProxy = new AlbumArtProxy({
+    publicBaseUrl: "https://art.example.com",
+    cacheDir,
+    fetchImage: async () => {
+      fetchCount += 1;
+      return Buffer.from("persisted-image-bytes");
+    }
+  });
+
+  const publicUrl = await firstProxy.cachePublicUrl("https://resources.tidal.com/images/cover.jpg", "radio:artist|track");
+  const artPath = new URL(publicUrl).pathname;
+
+  const secondProxy = new AlbumArtProxy({
+    publicBaseUrl: "https://art.example.com",
+    cacheDir,
+    fetchImage: async () => {
+      fetchCount += 1;
+      return Buffer.from("refetched-image-bytes");
+    }
+  });
+  const chunks = [];
+  const response = {
+    headers: null,
+    writeHead(status, headers) {
+      this.status = status;
+      this.headers = headers;
+    },
+    end(chunk) {
+      if (chunk) chunks.push(Buffer.from(chunk));
+    }
+  };
+
+  await secondProxy.handleRequest({ url: artPath }, response);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers["content-type"], "image/jpeg");
+  assert.equal(Buffer.concat(chunks).toString("utf8"), "persisted-image-bytes");
+  assert.equal(fetchCount, 1);
+});
+
+test("album art proxy returns fallback image for stale unknown art URL", async () => {
+  const proxy = new AlbumArtProxy({ publicBaseUrl: "https://art.example.com" });
+  const chunks = [];
+  const response = {
+    headers: null,
+    writeHead(status, headers) {
+      this.status = status;
+      this.headers = headers;
+    },
+    end(chunk) {
+      if (chunk) chunks.push(Buffer.from(chunk));
+    }
+  };
+
+  await proxy.handleRequest({ url: "/art/0123456789abcdef0123456789abcdef01234567.jpg" }, response);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers["content-type"], "image/png");
+  assert.equal(Buffer.concat(chunks).length > 1000, true);
 });
 
 test("album art proxy does not wrap its own public URLs again", () => {

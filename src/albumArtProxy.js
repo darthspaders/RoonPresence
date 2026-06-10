@@ -17,6 +17,8 @@ const ASSET_PATHS = {
 const DEFAULT_CACHE_DIR = path.join(__dirname, "..", ".cache");
 const TIDAL_BRIDGE_CACHE_FILE = "tidal-bridge-cache.json";
 const NOW_PLAYING_CACHE_FILE = "now-playing-cache.json";
+const ART_CACHE_MANIFEST_FILE = "album-art-cache.json";
+const ART_CACHE_DIR_NAME = "art";
 const assetBuffers = new Map();
 const DEFAULT_NOW_HISTORY_MAX = 25;
 const OG_IMAGE_WIDTH = 1200;
@@ -291,6 +293,23 @@ function writeJsonFile(filePath, value) {
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
 }
 
+function readArtCacheManifest(filePath) {
+  const raw = readJsonFile(filePath, {});
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+
+  const manifest = {};
+  for (const [id, value] of Object.entries(raw)) {
+    if (!/^[a-f0-9]{40}$/i.test(id) || !value || typeof value !== "object") continue;
+    const sourceUrl = isHttpUrl(value.sourceUrl) ? String(value.sourceUrl).trim() : "";
+    if (!sourceUrl) continue;
+    manifest[id] = {
+      sourceUrl,
+      fetchedAt: Number.isFinite(Number(value.fetchedAt)) ? Number(value.fetchedAt) : 0
+    };
+  }
+  return manifest;
+}
+
 function normalizeNowItem(value = {}) {
   const title = cleanBridgeText(value.title);
   if (!title) return null;
@@ -549,6 +568,9 @@ class AlbumArtProxy {
     this.cacheDir = cacheDir;
     this.tidalBridgeCachePath = path.join(this.cacheDir, TIDAL_BRIDGE_CACHE_FILE);
     this.tidalBridgeCache = readJsonFile(this.tidalBridgeCachePath, {});
+    this.artCacheDir = path.join(this.cacheDir, ART_CACHE_DIR_NAME);
+    this.artCacheManifestPath = path.join(this.cacheDir, ART_CACHE_MANIFEST_FILE);
+    this.artCacheManifest = readArtCacheManifest(this.artCacheManifestPath);
     this.nowHistoryMax = Number(nowHistoryMax) || DEFAULT_NOW_HISTORY_MAX;
     this.persistNowPlaying = !!persistNowPlaying;
     this.nowPlayingCachePath = path.join(this.cacheDir, NOW_PLAYING_CACHE_FILE);
@@ -559,6 +581,9 @@ class AlbumArtProxy {
     this.nowHistory = nowCache.nowHistory;
     this.server = null;
     this.entries = new Map();
+    for (const [id, entry] of Object.entries(this.artCacheManifest)) {
+      this.entries.set(id, { sourceUrl: entry.sourceUrl, buffer: null, fetchedAt: entry.fetchedAt });
+    }
   }
 
   get enabled() {
@@ -608,6 +633,9 @@ class AlbumArtProxy {
     this.port = nextPort;
     this.cacheMax = nextCacheMax;
     this.entries.clear();
+    for (const [id, entry] of Object.entries(this.artCacheManifest)) {
+      this.entries.set(id, { sourceUrl: entry.sourceUrl, buffer: null, fetchedAt: entry.fetchedAt });
+    }
 
     if (this.enabled) {
       this.start();
@@ -775,8 +803,12 @@ class AlbumArtProxy {
     const id = this.getOwnPublicArtId(publicUrl);
     const entry = id ? this.entries.get(id) : null;
     if (entry && !entry.buffer) {
-      entry.buffer = await this.fetchImage(entry.sourceUrl);
-      entry.fetchedAt = Date.now();
+      entry.buffer = this.readCachedArt(id);
+      if (!entry.buffer) {
+        entry.buffer = await this.fetchImage(entry.sourceUrl);
+        entry.fetchedAt = Date.now();
+        this.writeCachedArt(id, entry.buffer, entry);
+      }
     }
     return publicUrl;
   }
@@ -798,12 +830,75 @@ class AlbumArtProxy {
   remember(id, sourceUrl) {
     const existing = this.entries.get(id);
     this.entries.delete(id);
-    this.entries.set(id, existing || { sourceUrl, buffer: null, fetchedAt: 0 });
+    const entry = existing || this.createEntryFromManifest(id, sourceUrl);
+    this.entries.set(id, entry);
+    this.rememberArtManifest(id, entry);
 
     while (this.entries.size > this.cacheMax) {
       const oldest = this.entries.keys().next().value;
       this.entries.delete(oldest);
+      this.forgetCachedArt(oldest);
     }
+  }
+
+  createEntryFromManifest(id, sourceUrl = "") {
+    const existing = this.artCacheManifest[id] || {};
+    return {
+      sourceUrl: existing.sourceUrl || sourceUrl,
+      buffer: null,
+      fetchedAt: Number(existing.fetchedAt) || 0
+    };
+  }
+
+  getCachedArtPath(id) {
+    return path.join(this.artCacheDir, `${id}.jpg`);
+  }
+
+  readCachedArt(id) {
+    try {
+      return fs.readFileSync(this.getCachedArtPath(id));
+    } catch {
+      return null;
+    }
+  }
+
+  writeCachedArt(id, buffer, entry) {
+    fs.mkdirSync(this.artCacheDir, { recursive: true });
+    fs.writeFileSync(this.getCachedArtPath(id), buffer);
+    this.rememberArtManifest(id, entry);
+  }
+
+  rememberArtManifest(id, entry) {
+    if (!entry?.sourceUrl) return;
+    this.artCacheManifest[id] = {
+      sourceUrl: entry.sourceUrl,
+      fetchedAt: Number(entry.fetchedAt) || 0
+    };
+    writeJsonFile(this.artCacheManifestPath, this.artCacheManifest);
+  }
+
+  forgetCachedArt(id) {
+    delete this.artCacheManifest[id];
+    writeJsonFile(this.artCacheManifestPath, this.artCacheManifest);
+    try {
+      fs.unlinkSync(this.getCachedArtPath(id));
+    } catch {}
+  }
+
+  getDisplayAlbumArtUrl(albumArtUrl) {
+    if (!isHttpUrl(albumArtUrl)) return "";
+    const id = this.getOwnPublicArtId(albumArtUrl);
+    if (!id) return albumArtUrl;
+    if (this.entries.has(id) || fs.existsSync(this.getCachedArtPath(id))) return albumArtUrl;
+    return DEFAULT_NOW_ART_PATH;
+  }
+
+  getDisplayNowItem(item) {
+    if (!item) return null;
+    return {
+      ...item,
+      albumArtUrl: this.getDisplayAlbumArtUrl(item.albumArtUrl)
+    };
   }
 
   async handleRequest(request, response) {
@@ -913,12 +1008,16 @@ class AlbumArtProxy {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store"
       });
-      response.end(nowPlayingHtml(this.nowPlaying, this.nowHistory, {
+      response.end(nowPlayingHtml(
+        this.getDisplayNowItem(this.nowPlaying),
+        this.nowHistory.map((item) => this.getDisplayNowItem(item)).filter(Boolean),
+        {
         previewImageUrl,
         pageUrl,
         brandName: this.bridgeBrandName,
         stateUrl: nowStatePath
-      }));
+        }
+      ));
       return;
     }
 
@@ -974,14 +1073,24 @@ class AlbumArtProxy {
 
     const entry = this.entries.get(match[1]);
     if (!entry) {
-      response.writeHead(404, { "content-type": "text/plain" });
-      response.end("not found");
+      const fallbackBuffer = getAssetBuffer(ASSET_PATHS[DEFAULT_NOW_ART_PATH]);
+      response.writeHead(200, {
+        "content-type": getAssetContentType(ASSET_PATHS[DEFAULT_NOW_ART_PATH]),
+        "cache-control": "no-cache",
+        "content-length": fallbackBuffer.length
+      });
+      response.end(fallbackBuffer);
       return;
+    }
+
+    if (!entry.buffer) {
+      entry.buffer = this.readCachedArt(match[1]);
     }
 
     if (!entry.buffer) {
       entry.buffer = await this.fetchImage(entry.sourceUrl);
       entry.fetchedAt = Date.now();
+      this.writeCachedArt(match[1], entry.buffer, entry);
     }
 
     response.writeHead(200, {
