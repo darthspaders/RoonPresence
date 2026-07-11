@@ -61,7 +61,7 @@ function configFromEnv(env) {
       signalPathPrefix: env.HQPLAYER_SIGNAL_PATH_PREFIX || "",
       statusCommand: env.HQPLAYER_STATUS_COMMAND || "",
       rateCommand: env.HQPLAYER_RATE_COMMAND || "",
-      pollMs: Number(env.HQPLAYER_SIGNAL_PATH_POLL_MS || 5000)
+      pollMs: Number(env.HQPLAYER_SIGNAL_PATH_POLL_MS || 10000)
     },
     debugDiscordPayload: /^(1|true|yes)$/i.test(env.DEBUG_DISCORD_PAYLOAD || ""),
     memoryLogMs: Number(env.MEMORY_LOG_MS || 0),

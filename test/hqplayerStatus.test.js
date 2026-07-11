@@ -178,7 +178,7 @@ test("state output replaces the format field", () => {
   );
 });
 
-test("PCM output omits shaper from the signal path", () => {
+test("PCM output includes shaper from the signal path", () => {
   assert.equal(
     composeSignalPath({
       prefix: "poly-sinc-gauss-hires-mp, TPDF, PCM, 768kHz",
@@ -187,7 +187,7 @@ test("PCM output omits shaper from the signal path", () => {
       outputFormat: "PCM",
       outputRateKhz: 768
     }),
-    "poly-sinc-gauss-hires-mp, PCM, 768kHz"
+    "poly-sinc-gauss-hires-mp, TPDF, PCM, 768kHz"
   );
 });
 
@@ -283,4 +283,37 @@ test("provider does not refresh HQPlayer name lists when state indexes are uncha
   provider.lastListSignature = provider.createListSignature(stateOutput);
 
   assert.equal(provider.needsNamedListRefresh(stateOutput), false);
+});
+
+test("provider polls HQPlayer rate command while playback is active", () => {
+  const commands = [];
+  const provider = new HQPlayerStatusProvider({
+    rateCommand: "hqp localhost --state",
+    signalPathPrefix: "poly-sinc-gauss-hires-mp, TPDF, PCM",
+    logger: { info() {}, debug() {} },
+    exec: (file, args, options, callback) => {
+      assert.equal(file, process.execPath);
+      const command = Buffer.from(args[1], "base64").toString("utf8");
+      commands.push(command);
+      if (command.includes("--get-filters")) {
+        callback(null, '[42] "poly-sinc-gauss-long" 42\r\n');
+        return;
+      }
+      if (command.includes("--get-shapers")) {
+        callback(null, '[7] "TPDF" 7\r\n');
+        return;
+      }
+      callback(null, "state: 2 1:(42, 42 (40, 7), 2) -6.000000 0:192000 0 0 0 0 1 1 ''\r\n");
+    }
+  });
+
+  provider.setPlaybackActive(true);
+  provider.pollRates();
+
+  assert.deepEqual(commands, [
+    "hqp localhost --state",
+    "hqp localhost --get-filters",
+    "hqp localhost --get-shapers"
+  ]);
+  assert.equal(provider.getSignalPath(), "poly-sinc-gauss-long, TPDF, PCM, 192kHz");
 });

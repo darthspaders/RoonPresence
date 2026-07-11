@@ -4,6 +4,8 @@ const RoonApiTransport = require("roon-api-transport");
 const { makeZoneMatcher } = require("./zoneMatcher");
 
 const SEEK_JUMP_TOLERANCE_SECONDS = 5;
+const STATE_UPDATE_DEBOUNCE_MS = 1000;
+const NOW_PLAYING_MIN_EMIT_MS = 2000;
 
 function asNumber(value) {
   const number = Number(value);
@@ -56,6 +58,8 @@ class RoonClient extends EventEmitter {
     this.lastEmittedSignature = "";
     this.lastEmittedSeek = null;
     this.lastEmittedAt = 0;
+    this.zoneEvaluationTimer = null;
+    this.pendingCommand = "";
   }
 
   start() {
@@ -93,6 +97,7 @@ class RoonClient extends EventEmitter {
     this.transport = null;
     this.zones.clear();
     this.activeZoneId = null;
+    this.clearZoneEvaluationTimer();
     this.resetEmissionState();
     this.emit("inactive");
   }
@@ -134,6 +139,28 @@ class RoonClient extends EventEmitter {
       });
     }
 
+    this.scheduleActiveZoneEvaluation(command);
+  }
+
+  scheduleActiveZoneEvaluation(command) {
+    this.pendingCommand = command || this.pendingCommand;
+    if (this.zoneEvaluationTimer) return;
+
+    this.zoneEvaluationTimer = setTimeout(() => {
+      const pendingCommand = this.pendingCommand;
+      this.pendingCommand = "";
+      this.zoneEvaluationTimer = null;
+      this.evaluateActiveZone(pendingCommand);
+    }, STATE_UPDATE_DEBOUNCE_MS);
+  }
+
+  clearZoneEvaluationTimer() {
+    if (this.zoneEvaluationTimer) clearTimeout(this.zoneEvaluationTimer);
+    this.zoneEvaluationTimer = null;
+    this.pendingCommand = "";
+  }
+
+  evaluateActiveZone(command) {
     const candidates = [...this.zones.values()].filter((zone) => this.isHqPlayerZone(zone));
     const playing = candidates.find((zone) => zone.state === "playing");
     const selected = playing || candidates[0];
@@ -180,7 +207,7 @@ class RoonClient extends EventEmitter {
       return true;
     }
 
-    if (this.isSeekJump(seek, now)) {
+    if (this.isSeekJump(seek, now) && now - this.lastEmittedAt >= NOW_PLAYING_MIN_EMIT_MS) {
       this.lastEmittedSeek = seek;
       this.lastEmittedAt = now;
       return true;

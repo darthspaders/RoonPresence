@@ -48,6 +48,10 @@ function normalizeTidalUrl(value) {
   return url;
 }
 
+function isHttpUrl(value) {
+  return /^https?:\/\//i.test(String(value || ""));
+}
+
 class PresencePublisher {
   constructor({
     discord,
@@ -113,6 +117,7 @@ class PresencePublisher {
       `Publishing Discord presence: ${presence.activity.details} - ${presence.activity.state}`
     );
     const rpcActivity = this.toDiscordRpcActivity(presence);
+    this.prefetchAlbumArt(presence, rpcActivity);
     this.albumArtProvider?.updateNowPlaying?.(presence, rpcActivity);
     if (this.debugPayload) {
       console.log("[DISCORD PAYLOAD]", JSON.stringify(rpcActivity, null, 2));
@@ -179,12 +184,14 @@ class PresencePublisher {
 
   toDiscordRpcActivity(presence) {
     const { activity } = presence;
+    const name = this.createActivityName(presence);
     const rpcActivity = {
       type: 2,
       details: activity.details,
       state: activity.state,
       instance: !!activity.instance
     };
+    if (name) rpcActivity.name = name;
     const timestamps = activity.timestamps || {};
 
     if (Number.isFinite(timestamps.start)) {
@@ -208,6 +215,26 @@ class PresencePublisher {
     if (buttons.length) rpcActivity.buttons = buttons;
 
     return rpcActivity;
+  }
+
+  createActivityName(presence) {
+    const title = cleanText(presence.metadata?.title);
+    const artist = cleanText(presence.metadata?.artist);
+    if (title) return formatTrackLine(title, artist);
+
+    return "";
+  }
+
+  prefetchAlbumArt(presence, rpcActivity = {}) {
+    const sourceUrl = presence.metadata?.albumArtUrl;
+    const publicUrl = rpcActivity.largeImageKey;
+    if (!sourceUrl || !isHttpUrl(publicUrl)) return;
+
+    this.albumArtProvider
+      ?.prefetchPublicUrl?.(sourceUrl, presence.metadata?.albumArtKey || "")
+      ?.catch?.((error) => {
+        this.logger?.warn?.("Album art prefetch failed", { error: error.message });
+      });
   }
 
   createButtons(presence) {

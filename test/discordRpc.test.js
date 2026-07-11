@@ -13,6 +13,7 @@ test("discord adapter preserves listening type and converts timestamp fields", (
 
   const wireActivity = client.toRpcWireActivity({
     type: 2,
+    name: "Artist - Track",
     details: "Track",
     state: "Artist",
     instance: false,
@@ -22,6 +23,7 @@ test("discord adapter preserves listening type and converts timestamp fields", (
 
   assert.deepEqual(wireActivity, {
     type: 2,
+    name: "Artist - Track",
     details: "Track",
     state: "Artist",
     instance: false,

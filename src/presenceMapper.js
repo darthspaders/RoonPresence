@@ -1,3 +1,5 @@
+const { getRadioStationName, parseRadioTrack } = require("./radioMetadataResolver");
+
 function asFiniteNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
@@ -14,6 +16,10 @@ function firstText(...values) {
     if (text) return text;
   }
   return "";
+}
+
+function isLikelyStationLabel(value) {
+  return /\b(?:di\.?fm|radio|station|stream|live\s+stream|premium)\b/i.test(cleanText(value));
 }
 
 function stringifySignalPath(value) {
@@ -145,21 +151,21 @@ class PresenceMapper {
 
     const length = asFiniteNumber(nowPlaying.length);
     const seek = asFiniteNumber(nowPlaying.seek_position ?? zone.seek_position);
-    const title = firstText(
+    const rawTitle = firstText(
       nowPlaying.three_line?.line1,
       nowPlaying.two_line?.line1,
       nowPlaying.one_line?.line1,
       nowPlaying.title,
       "Roon"
     );
-    const artist = firstText(
+    const rawArtist = firstText(
       nowPlaying.three_line?.line2,
       nowPlaying.two_line?.line2,
       nowPlaying.artist,
       nowPlaying.album,
       zone.display_name
     );
-    const albumOrStation = firstText(
+    const rawAlbumOrStation = firstText(
       nowPlaying.three_line?.line3,
       nowPlaying.album,
       zone.display_name
@@ -173,6 +179,59 @@ class PresenceMapper {
         nowPlaying.image_url ||
         nowPlaying.imageUrl
     );
+    const timestampMode = isLocalTrack(zone, nowPlaying, length, seek) ? "LOCAL" : "RADIO";
+    let title = rawTitle;
+    let artist = rawArtist;
+    let albumOrStation = rawAlbumOrStation;
+    let radioStationName = "";
+
+    if (timestampMode === "RADIO") {
+      radioStationName = getRadioStationName({
+        title: rawTitle,
+        artist: rawArtist,
+        album: rawAlbumOrStation,
+        originalTitle: rawTitle,
+        originalArtist: rawArtist,
+        originalAlbum: rawAlbumOrStation
+      });
+      if (!radioStationName && isLikelyStationLabel(rawTitle)) radioStationName = rawTitle;
+      const structuredRadio = radioStationName && isLikelyStationLabel(rawTitle) && rawArtist && !isLikelyStationLabel(rawArtist);
+      let parsed = null;
+      if (structuredRadio && /\s+[-\u2013\u2014]\s+/.test(rawArtist)) {
+        parsed = parseRadioTrack({
+          title: rawArtist,
+          artist: rawAlbumOrStation,
+          album: rawAlbumOrStation,
+          originalTitle: rawArtist,
+          originalArtist: rawAlbumOrStation,
+          originalAlbum: rawAlbumOrStation,
+          activityDetails: rawArtist,
+          activityState: rawAlbumOrStation
+        });
+      } else if (!structuredRadio) {
+        parsed = parseRadioTrack({
+          title: rawTitle,
+          artist: rawArtist,
+          album: rawAlbumOrStation,
+          originalTitle: rawTitle,
+          originalArtist: rawArtist,
+          originalAlbum: rawAlbumOrStation,
+          activityDetails: rawTitle,
+          activityState: rawArtist
+        });
+      }
+      if (parsed?.title) {
+        title = parsed.title;
+        artist = parsed.artist || "";
+        albumOrStation = rawAlbumOrStation || radioStationName || zoneName;
+      } else if (structuredRadio) {
+        title = rawArtist;
+        artist = rawAlbumOrStation && rawAlbumOrStation !== zoneName && !isLikelyStationLabel(rawAlbumOrStation)
+          ? rawAlbumOrStation
+          : "";
+        albumOrStation = radioStationName || rawAlbumOrStation || zoneName;
+      }
+    }
 
     const activity = {
       details: (signalPath ? `${title} - ${artist}` : title).slice(0, 128),
@@ -180,7 +239,6 @@ class PresenceMapper {
       instance: false
     };
 
-    const timestampMode = isLocalTrack(zone, nowPlaying, length, seek) ? "LOCAL" : "RADIO";
     const timestamps = this.buildTimestamps(zone, nowPlaying, length, seek, timestampMode);
     if (timestamps) activity.timestamps = timestamps;
 
@@ -195,9 +253,10 @@ class PresenceMapper {
         title,
         artist,
         album: albumOrStation,
-        originalTitle: title,
-        originalArtist: artist,
-        originalAlbum: albumOrStation,
+        originalTitle: rawTitle,
+        originalArtist: rawArtist,
+        originalAlbum: rawAlbumOrStation,
+        radioStationName,
         zoneName,
         length,
         signalPath,

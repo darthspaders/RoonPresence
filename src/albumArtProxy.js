@@ -802,15 +802,17 @@ class AlbumArtProxy {
 
     const id = this.getOwnPublicArtId(publicUrl);
     const entry = id ? this.entries.get(id) : null;
-    if (entry && !entry.buffer) {
-      entry.buffer = this.readCachedArt(id);
-      if (!entry.buffer) {
-        entry.buffer = await this.fetchImage(entry.sourceUrl);
-        entry.fetchedAt = Date.now();
-        this.writeCachedArt(id, entry.buffer, entry);
-      }
-    }
+    if (entry) await this.ensureCachedArt(id, entry);
     return publicUrl;
+  }
+
+  async prefetchPublicUrl(sourceUrl, imageKey = "") {
+    try {
+      return await this.cachePublicUrl(sourceUrl, imageKey);
+    } catch (error) {
+      this.logger?.warn?.("Album art prefetch failed", { error: error.message });
+      return this.getPublicUrl(sourceUrl, imageKey);
+    }
   }
 
   createId(sourceUrl, imageKey = "") {
@@ -885,11 +887,40 @@ class AlbumArtProxy {
     } catch {}
   }
 
+  async ensureCachedArt(id, entry) {
+    if (!entry.buffer) {
+      entry.buffer = this.readCachedArt(id);
+    }
+
+    if (!entry.buffer) {
+      entry.buffer = await this.fetchImage(entry.sourceUrl);
+      entry.fetchedAt = Date.now();
+      this.writeCachedArt(id, entry.buffer, entry);
+    }
+
+    return entry.buffer;
+  }
+
+  hasCachedArt(id, entry = null) {
+    return !!entry?.buffer || fs.existsSync(this.getCachedArtPath(id));
+  }
+
+  serveFallbackArt(response) {
+    const fallbackBuffer = getAssetBuffer(ASSET_PATHS[DEFAULT_NOW_ART_PATH]);
+    response.writeHead(200, {
+      "content-type": getAssetContentType(ASSET_PATHS[DEFAULT_NOW_ART_PATH]),
+      "cache-control": "no-cache",
+      "content-length": fallbackBuffer.length
+    });
+    response.end(fallbackBuffer);
+  }
+
   getDisplayAlbumArtUrl(albumArtUrl) {
     if (!isHttpUrl(albumArtUrl)) return "";
     const id = this.getOwnPublicArtId(albumArtUrl);
     if (!id) return albumArtUrl;
-    if (this.entries.has(id) || fs.existsSync(this.getCachedArtPath(id))) return albumArtUrl;
+    const entry = this.entries.get(id);
+    if (this.hasCachedArt(id, entry)) return albumArtUrl;
     return DEFAULT_NOW_ART_PATH;
   }
 
@@ -1073,32 +1104,29 @@ class AlbumArtProxy {
 
     const entry = this.entries.get(match[1]);
     if (!entry) {
-      const fallbackBuffer = getAssetBuffer(ASSET_PATHS[DEFAULT_NOW_ART_PATH]);
-      response.writeHead(200, {
-        "content-type": getAssetContentType(ASSET_PATHS[DEFAULT_NOW_ART_PATH]),
-        "cache-control": "no-cache",
-        "content-length": fallbackBuffer.length
-      });
-      response.end(fallbackBuffer);
+      this.serveFallbackArt(response);
       return;
     }
 
-    if (!entry.buffer) {
-      entry.buffer = this.readCachedArt(match[1]);
-    }
-
-    if (!entry.buffer) {
-      entry.buffer = await this.fetchImage(entry.sourceUrl);
-      entry.fetchedAt = Date.now();
-      this.writeCachedArt(match[1], entry.buffer, entry);
+    let buffer = null;
+    try {
+      buffer = await this.ensureCachedArt(match[1], entry);
+    } catch (error) {
+      entry.buffer = null;
+      this.logger?.warn?.("Album art fetch failed; serving fallback artwork", {
+        error: error.message,
+        sourceUrl: entry.sourceUrl
+      });
+      this.serveFallbackArt(response);
+      return;
     }
 
     response.writeHead(200, {
       "content-type": "image/jpeg",
       "cache-control": "public, max-age=3600",
-      "content-length": entry.buffer.length
+      "content-length": buffer.length
     });
-    response.end(entry.buffer);
+    response.end(buffer);
   }
 }
 

@@ -148,6 +148,16 @@ test("new track publishes immediately", () => {
   assert.equal(harness.published[1].details, "Track B");
 });
 
+test("Discord activity name uses current track for compact server card", () => {
+  const harness = createHarness();
+
+  assert.equal(harness.publisher.publishZone(localZone({ title: "Apollo (Fuenka Remix)", artist: "Sean & Dee vs Melody Stranger" })), true);
+
+  assert.equal(harness.published[0].name, "Sean & Dee vs Melody Stranger - Apollo (Fuenka Remix)");
+  assert.equal(harness.published[0].details, "Apollo (Fuenka Remix)");
+  assert.equal(harness.published[0].state, "Sean & Dee vs Melody Stranger");
+});
+
 test("local to radio publishes once and removes end timestamp", () => {
   const harness = createHarness();
 
@@ -341,6 +351,31 @@ test("album art proxy URL is sent as Discord large image", () => {
 
   assert.equal(harness.published[0].largeImageKey, "https://roon-art.example.com/art/abc123.jpg");
   assert.equal(harness.published[0].largeImageText, "Album");
+});
+
+test("publisher asks album art proxy to prefetch local Roon artwork", () => {
+  const harness = createHarness();
+  const prefetches = [];
+  harness.publisher.albumArtProvider = {
+    getPublicUrl: (sourceUrl, imageKey) => {
+      assert.equal(sourceUrl, "http://127.0.0.1:9100/api/image/abc123?scale=fill");
+      assert.equal(imageKey, "abc123");
+      return "https://roon-art.example.com/art/abc123.jpg";
+    },
+    prefetchPublicUrl: (sourceUrl, imageKey) => {
+      prefetches.push({ sourceUrl, imageKey });
+      return Promise.resolve("https://roon-art.example.com/art/abc123.jpg");
+    }
+  };
+
+  assert.equal(harness.publisher.publishZone(localZoneWithAlbumArt()), true);
+
+  assert.deepEqual(prefetches, [
+    {
+      sourceUrl: "http://127.0.0.1:9100/api/image/abc123?scale=fill",
+      imageKey: "abc123"
+    }
+  ]);
 });
 
 test("radio album art shows station name as asset text", () => {

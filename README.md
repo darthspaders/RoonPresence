@@ -322,6 +322,8 @@ If memory grows unexpectedly, keep `MEMORY_LOG_MS=300000` and compare the period
 ## Test
 
 ```powershell
+npm run check
 npm test
+npm audit --audit-level=moderate
 ```
 

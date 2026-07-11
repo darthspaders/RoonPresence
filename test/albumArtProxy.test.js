@@ -167,6 +167,78 @@ test("album art proxy returns fallback image for stale unknown art URL", async (
   assert.equal(Buffer.concat(chunks).length > 1000, true);
 });
 
+test("album art proxy returns fallback image when remembered artwork cannot be fetched", async () => {
+  const proxy = new AlbumArtProxy({
+    publicBaseUrl: "https://art.example.com",
+    cacheDir: fs.mkdtempSync(path.join(os.tmpdir(), "roonpresence-stale-art-")),
+    fetchImage: async () => {
+      throw new Error("Roon image key expired");
+    }
+  });
+  const publicUrl = proxy.getPublicUrl("http://127.0.0.1:9330/api/image/expired", "expired");
+  const chunks = [];
+  const response = {
+    headers: null,
+    writeHead(status, headers) {
+      this.status = status;
+      this.headers = headers;
+    },
+    end(chunk) {
+      if (chunk) chunks.push(Buffer.from(chunk));
+    }
+  };
+
+  await proxy.handleRequest({ url: new URL(publicUrl).pathname }, response);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers["content-type"], "image/png");
+  assert.equal(Buffer.concat(chunks).length > 1000, true);
+});
+
+test("now playing feed hides remembered artwork that has not been cached", async () => {
+  const proxy = new AlbumArtProxy({
+    publicBaseUrl: "https://art.example.com",
+    cacheDir: fs.mkdtempSync(path.join(os.tmpdir(), "roonpresence-uncached-now-"))
+  });
+  const publicUrl = proxy.getPublicUrl("http://127.0.0.1:9330/api/image/not-yet-cached", "not-yet-cached");
+  proxy.updateNowPlaying(
+    {
+      timestampMode: "LOCAL",
+      activity: {
+        details: "Way Out West - Instensify, Pt. 1",
+        state: "poly-sinc-gauss-hires-mp, TPDF, PCM"
+      },
+      metadata: {
+        title: "Instensify, Pt. 1",
+        artist: "Way Out West",
+        album: "My Frequency"
+      }
+    },
+    {
+      largeImageKey: publicUrl
+    }
+  );
+
+  const chunks = [];
+  const response = {
+    headers: null,
+    writeHead(status, headers) {
+      this.status = status;
+      this.headers = headers;
+    },
+    end(chunk) {
+      if (chunk) chunks.push(Buffer.from(chunk));
+    }
+  };
+
+  await proxy.handleRequest({ url: "/now" }, response);
+
+  const html = Buffer.concat(chunks).toString("utf8");
+  assert.equal(response.status, 200);
+  assert.doesNotMatch(html, new RegExp(publicUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(html, /<img class="cover" src="\/assets\/radio-fallback\.png" alt="Album art">/);
+});
+
 test("album art proxy does not wrap its own public URLs again", () => {
   const proxy = new AlbumArtProxy({ publicBaseUrl: "https://art.example.com" });
   const publicUrl = proxy.getPublicUrl("https://resources.tidal.com/images/cover.jpg", "radio:artist|track");

@@ -66,10 +66,38 @@ test("DI.FM with finite Roon length is still treated as radio", () => {
   });
 
   assert.equal(presence.timestampMode, "RADIO");
-  assert.equal(presence.activity.details, "01 Progressive House -DI.FM");
-  assert.equal(presence.activity.state, "Abyss");
+  assert.equal(presence.activity.details, "Abyss");
+  assert.equal(presence.activity.state, "01 Progressive House -DI.FM");
+  assert.equal(presence.metadata.radioStationName, "01 Progressive House -DI.FM");
   assert.deepEqual(presence.activity.timestamps, { start: 1780447314406 });
   assert.equal("end" in presence.activity.timestamps, false);
+});
+
+test("DI.FM station line does not become the current track title", () => {
+  const mapper = new PresenceMapper({ clock: () => 2_000_000 });
+  const presence = mapper.mapPresence({
+    zone_id: "zone-1",
+    display_name: "HQPlayer",
+    is_seek_allowed: false,
+    now_playing: {
+      seek_position: 481,
+      two_line: {
+        line1: "Progressive -DI.FM",
+        line2: "Sparkles (Extended Progressive Mix)"
+      },
+      three_line: {
+        line1: "Progressive -DI.FM",
+        line2: "Sparkles (Extended Progressive Mix)",
+        line3: "Nordic Noir"
+      }
+    }
+  });
+
+  assert.equal(presence.timestampMode, "RADIO");
+  assert.equal(presence.metadata.title, "Sparkles (Extended Progressive Mix)");
+  assert.equal(presence.metadata.artist, "Nordic Noir");
+  assert.equal(presence.metadata.radioStationName, "Progressive -DI.FM");
+  assert.equal(presence.activity.details, "Sparkles (Extended Progressive Mix)");
 });
 
 test("radio uses Roon stream seek_position for elapsed listening time", () => {

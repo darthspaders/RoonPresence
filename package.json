@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node src/index.js",
     "setup": "node scripts/setup.js",
+    "check": "node scripts/check-syntax.js",
     "lastfm:auth": "node scripts/lastfm-auth.js",
     "lastfm:mobile-auth": "node scripts/lastfm-auth.js --mobile",
     "build:launcher": "powershell -ExecutionPolicy Bypass -File scripts/build-launcher.ps1",

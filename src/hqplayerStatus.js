@@ -2,6 +2,8 @@ const { execFile, spawn } = require("child_process");
 const EventEmitter = require("events");
 const path = require("path");
 
+const MIN_HQPLAYER_POLL_MS = 10_000;
+
 function splitCommand(command) {
   const parts = [];
   let current = "";
@@ -96,7 +98,7 @@ function composeSignalPath({
   );
 
   if (filter) withoutLiveFields.push(filter);
-  if (format === "SDM" && shaper) withoutLiveFields.push(shaper);
+  if (shaper) withoutLiveFields.push(shaper);
   if (format) withoutLiveFields.push(format);
   if (dsdRate) withoutLiveFields.push(dsdRate);
   if (rate) withoutLiveFields.push(rate);
@@ -211,6 +213,15 @@ function siblingCommand(command, replacementArg) {
   return parts.map((part) => (/\s/.test(part) ? `"${part}"` : part)).join(" ");
 }
 
+function normalizePollMs(value) {
+  const number = Number(value);
+  return Math.max(MIN_HQPLAYER_POLL_MS, Number.isFinite(number) && number > 0 ? number : MIN_HQPLAYER_POLL_MS);
+}
+
+function commandTimeoutMs(pollMs) {
+  return Math.min(8000, Math.max(1000, Math.floor(pollMs * 0.8)));
+}
+
 class HQPlayerStatusProvider extends EventEmitter {
   constructor({
     command = "",
@@ -218,10 +229,11 @@ class HQPlayerStatusProvider extends EventEmitter {
     statusCommand = "",
     rateCommand = "",
     signalPathPrefix = "",
-    pollMs = 5000,
+    pollMs = 10000,
     logger,
     exec = execFile,
-    spawnProcess = spawn
+    spawnProcess = spawn,
+    activePlaybackProvider = null
   } = {}) {
     super();
     this.command = command;
@@ -229,15 +241,18 @@ class HQPlayerStatusProvider extends EventEmitter {
     this.statusCommand = statusCommand;
     this.rateCommand = rateCommand;
     this.signalPathPrefix = signalPathPrefix;
-    this.pollMs = pollMs;
+    this.pollMs = normalizePollMs(pollMs);
     this.logger = logger;
     this.exec = exec;
     this.spawnProcess = spawnProcess;
+    this.activePlaybackProvider = typeof activePlaybackProvider === "function" ? activePlaybackProvider : null;
+    this.playbackActive = false;
     this.signalPath = staticSignalPath || signalPathPrefix;
     this.timer = null;
     this.inFlight = false;
     this.statusProcess = null;
     this.statusBuffer = "";
+    this.statusTimer = null;
     this.rateTimer = null;
     this.filterNames = new Map();
     this.shaperNames = new Map();
@@ -246,6 +261,18 @@ class HQPlayerStatusProvider extends EventEmitter {
     this.lastStateOutput = null;
     this.lastListSignature = "";
     this.started = false;
+  }
+
+  setPlaybackActive(active) {
+    this.playbackActive = Boolean(active);
+  }
+
+  isPlaybackActive() {
+    try {
+      return Boolean(this.playbackActive || this.activePlaybackProvider?.());
+    } catch {
+      return Boolean(this.playbackActive);
+    }
   }
 
   start() {
@@ -268,8 +295,9 @@ class HQPlayerStatusProvider extends EventEmitter {
     }
 
     if (this.statusCommand && !this.rateCommand) {
-      this.logger?.info("Streaming HQPlayer status");
-      this.startStatusStream();
+      this.logger?.info("Polling HQPlayer status");
+      this.pollStatus();
+      this.statusTimer = setInterval(() => this.pollStatus(), this.pollMs);
     }
 
     if (this.rateCommand) {
@@ -285,15 +313,16 @@ class HQPlayerStatusProvider extends EventEmitter {
     statusCommand = "",
     rateCommand = "",
     signalPathPrefix = "",
-    pollMs = 5000
+    pollMs = 10000
   } = {}) {
+    const nextPollMs = normalizePollMs(pollMs);
     const changed =
       command !== this.command ||
       staticSignalPath !== this.staticSignalPath ||
       statusCommand !== this.statusCommand ||
       rateCommand !== this.rateCommand ||
       signalPathPrefix !== this.signalPathPrefix ||
-      pollMs !== this.pollMs;
+      nextPollMs !== this.pollMs;
 
     if (!changed) return false;
 
@@ -304,7 +333,7 @@ class HQPlayerStatusProvider extends EventEmitter {
     this.statusCommand = statusCommand;
     this.rateCommand = rateCommand;
     this.signalPathPrefix = signalPathPrefix;
-    this.pollMs = pollMs;
+    this.pollMs = nextPollMs;
     this.setSignalPath(staticSignalPath || signalPathPrefix);
     if (shouldRestart) this.start();
     return true;
@@ -312,8 +341,10 @@ class HQPlayerStatusProvider extends EventEmitter {
 
   stop() {
     if (this.timer) clearInterval(this.timer);
+    if (this.statusTimer) clearInterval(this.statusTimer);
     if (this.rateTimer) clearInterval(this.rateTimer);
     this.timer = null;
+    this.statusTimer = null;
     this.rateTimer = null;
     this.started = false;
     this.rateInFlight = false;
@@ -339,7 +370,7 @@ class HQPlayerStatusProvider extends EventEmitter {
       file,
       args,
       {
-        timeout: Math.max(1000, Math.floor(this.pollMs * 0.8)),
+        timeout: commandTimeoutMs(this.pollMs),
         windowsHide: true
       },
       (error, stdout) => {
@@ -379,6 +410,31 @@ class HQPlayerStatusProvider extends EventEmitter {
       this.statusProcess = null;
       setTimeout(() => this.startStatusStream(), this.pollMs);
     });
+  }
+
+  pollStatus() {
+    if (this.inFlight || !this.statusCommand) return;
+
+    const [file, ...args] = splitCommand(this.statusCommand);
+    if (!file) return;
+
+    this.inFlight = true;
+    this.exec(
+      file,
+      args,
+      {
+        timeout: commandTimeoutMs(this.pollMs),
+        windowsHide: true
+      },
+      (error, stdout) => {
+        this.inFlight = false;
+        if (error) {
+          this.logger?.debug("HQPlayer status command failed", { error: error.message });
+          return;
+        }
+        this.handleStatusChunk(`${stdout || ""}\n`);
+      }
+    );
   }
 
   handleStatusChunk(chunk) {
@@ -497,7 +553,7 @@ class HQPlayerStatusProvider extends EventEmitter {
   capturePtyCommand(command, callback) {
     const workerPath = path.join(__dirname, "hqplayerPtyWorker.js");
     const encodedCommand = Buffer.from(command, "utf8").toString("base64");
-    const timeoutMs = Math.max(1000, Math.floor(this.pollMs * 0.8));
+    const timeoutMs = commandTimeoutMs(this.pollMs);
 
     this.exec(
       process.execPath,

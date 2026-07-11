@@ -585,73 +585,32 @@ test("extracts TIDAL artwork from web page text", () => {
   );
 });
 
-test("resolver tries guest-credit-cleaned TIDAL web search", async () => {
-  const fetched = [];
+test("resolver skips TIDAL web artwork when radio lookup has an artist", async () => {
+  let fetched = false;
   const resolver = new RadioMetadataResolver({
     tidalSearchBaseUrl: "https://tidal.com/search?q=",
     albumArtProvider: {
-      cachePublicUrl: async () => "https://art.example.com/art/rinzen.jpg"
+      cachePublicUrl: async () => "https://art.example.com/art/wrong.jpg"
     },
-    fetchImpl: async (url) => {
-      fetched.push(decodeURIComponent(url));
-      const hasCleaned = decodeURIComponent(url).includes("Rinzen D?j? Vu [Julian Schwarz Remix]");
+    fetchImpl: async () => {
+      fetched = true;
       return {
         ok: true,
-        text: async () => hasCleaned
-          ? "https://resources.tidal.com/images/12345678/abcd/4321/9000/123456789abc/640x640.jpg"
-          : "<html></html>"
+        text: async () => "https://resources.tidal.com/images/12345678/abcd/4321/9000/123456789abc/640x640.jpg"
       };
-    },
-    fetchJson: async () => {
-      throw new Error("API should not be called when cleaned web artwork resolves");
     }
   });
 
-  const result = await resolver.lookup(
-    { artist: "Rinzen", title: "D?j? Vu (feat. Molly Moonwater) [Julian Schwarz Remix]" },
-    "rinzen|deja vu feat molly moonwater julian schwarz remix"
+  const result = await resolver.searchTidalWeb(
+    { artist: "Abity", title: "Lonely (Original Mix)" },
+    "abity|lonely"
   );
 
-  assert.equal(result.source, "tidal-web");
-  assert.equal(result.albumArtUrl, "https://art.example.com/art/rinzen.jpg");
-  assert.equal(fetched.some((url) => url.includes("Rinzen D?j? Vu [Julian Schwarz Remix]")), true);
+  assert.equal(result, null);
+  assert.equal(fetched, false);
 });
 
-
-test("resolver tries single artist aliases before full comma artist for TIDAL web artwork", async () => {
-  const fetched = [];
-  const resolver = new RadioMetadataResolver({
-    tidalSearchBaseUrl: "https://tidal.com/search?q=",
-    albumArtProvider: {
-      cachePublicUrl: async () => "https://art.example.com/art/through-darkness.jpg"
-    },
-    fetchImpl: async (url) => {
-      fetched.push(decodeURIComponent(url));
-      if (!decodeURIComponent(url).includes("Ghostbeat Through The Darkness (Original Mix)")) {
-        return { ok: true, text: async () => "<html></html>" };
-      }
-      return {
-        ok: true,
-        text: async () => '<html><a href="/browse/track/12345">play</a><img src="https://resources.tidal.com/images/12345678/abcd/4321/9000/123456789abc/640x640.jpg"></html>'
-      };
-    },
-    fetchJson: async () => {
-      throw new Error("API should not be called when web artwork resolves");
-    }
-  });
-
-  const result = await resolver.lookup(
-    { artist: "Ghostbeat,LTN", title: "Through The Darkness (Original Mix)" },
-    "ghostbeat ltn|through the darkness original mix"
-  );
-
-  assert.equal(result.source, "tidal-web");
-  assert.equal(result.albumArtUrl, "https://art.example.com/art/through-darkness.jpg");
-  assert.equal(fetched[0], "https://tidal.com/search?q=Ghostbeat,LTN Through The Darkness (Original Mix)");
-  assert.equal(fetched.some((url) => url.includes("Ghostbeat Through The Darkness (Original Mix)")), true);
-});
-
-test("resolver uses TIDAL web artwork through album art proxy before API lookup", async () => {
+test("resolver can still use TIDAL web artwork for title-only radio lookups", async () => {
   const fetched = [];
   const cached = [];
   const resolver = new RadioMetadataResolver({
@@ -674,19 +633,19 @@ test("resolver uses TIDAL web artwork through album art proxy before API lookup"
     }
   });
 
-  const result = await resolver.lookup(
-    { artist: "Ritchie Haydn", title: "In A Dream (Club Mix)" },
-    "ritchie haydn|in a dream club mix"
+  const result = await resolver.searchTidalWeb(
+    { artist: "", title: "In A Dream (Club Mix)" },
+    "|in a dream club mix"
   );
 
   assert.equal(result.source, "tidal-web");
   assert.equal(result.albumArtUrl, "https://art.example.com/art/tidal-web.jpg");
   assert.equal(result.tidalUrl, "https://tidal.com/browse/track/12345");
-  assert.equal(fetched[0], "https://tidal.com/search?q=Ritchie%20Haydn%20In%20A%20Dream%20(Club%20Mix)");
+  assert.equal(fetched[0], "https://tidal.com/search?q=In%20A%20Dream%20(Club%20Mix)");
   assert.deepEqual(cached, [
     {
       sourceUrl: "https://resources.tidal.com/images/12345678/abcd/4321/9000/123456789abc/640x640.jpg",
-      imageKey: "radio:ritchie haydn|in a dream club mix"
+      imageKey: "radio:|in a dream club mix"
     }
   ]);
 });
@@ -1137,6 +1096,30 @@ test("resolver applies parsed radio track text before artwork resolves", () => {
   resolver.stop();
 });
 
+test("resolver does not queue artwork lookup for live radio show titles", () => {
+  const resolver = new RadioMetadataResolver({ enabled: true, minLookupIntervalMs: 60_000 });
+  const presence = {
+    timestampMode: "RADIO",
+    activity: {
+      details: "Piet van Noord - Electronic Devotion Episode 203 (12 June 2026) Part 1",
+      state: "Progressive -DI.FM"
+    },
+    metadata: {
+      title: "Electronic Devotion Episode 203 (12 June 2026) Part 1",
+      artist: "Piet van Noord",
+      album: "Piet van Noord",
+      radioStationName: "Progressive -DI.FM"
+    }
+  };
+
+  assert.equal(resolver.apply(presence), false);
+  assert.equal(presence.metadata.title, "Electronic Devotion Episode 203 (12 June 2026) Part 1");
+  assert.equal(presence.metadata.artist, "Piet van Noord");
+  assert.equal(presence.metadata.radioProgram, true);
+  assert.equal(resolver.queue.length, 0);
+  resolver.stop();
+});
+
 test("resolver does not run for local tracks", () => {
   const resolver = new RadioMetadataResolver({ enabled: true });
   const presence = {
@@ -1237,6 +1220,30 @@ test("Discogs result accepts matching artist and title", () => {
       { artist: "Pedro Aviles", title: "Tides Of Time" }
     ),
     { title: "Pedro Aviles - Tides Of Time", coverImage: "https://img.discogs.com/right.jpg" }
+  );
+});
+
+test("TIDAL result rejects same title from wrong artist", () => {
+  assert.equal(
+    chooseTidalTrack(
+      {
+        tracks: {
+          items: [
+            {
+              id: "1",
+              title: "Lonely",
+              artists: [{ name: "Akon" }],
+              album: {
+                title: "Trouble",
+                cover: "12345678-abcd-4321-9000-123456789abc"
+              }
+            }
+          ]
+        }
+      },
+      { artist: "Abity", title: "Lonely (Original Mix)" }
+    ),
+    null
   );
 });
 

@@ -94,12 +94,14 @@ function main() {
   });
 
   health.logStartup();
+  let hqplayerRepublishTimer = null;
 
   roon.on("playing", (zone) => {
     health.update("roon", "playing", {
       zone: zone.display_name || zone.zone_id
     });
     health.update("hqplayer", "active");
+    hqplayerStatus.setPlaybackActive(true);
     hqplayerStatus.start();
     publisher.publishZone(zone);
   });
@@ -108,8 +110,12 @@ function main() {
     health.update("hqplayer", "signal-ready", {
       signalPath: hqplayerStatus.getSignalPath()
     });
-    logger.info("HQPlayer signal path changed; refreshing Discord presence");
-    publisher.republishLast();
+    if (hqplayerRepublishTimer) clearTimeout(hqplayerRepublishTimer);
+    hqplayerRepublishTimer = setTimeout(() => {
+      hqplayerRepublishTimer = null;
+      logger.info("HQPlayer signal path changed; refreshing Discord presence");
+      publisher.republishLast();
+    }, 1000);
   });
 
   discord.on("connected", () => {
@@ -184,7 +190,12 @@ function main() {
   roon.on("inactive", () => {
     health.update("roon", "inactive");
     health.update("hqplayer", "idle");
+    hqplayerStatus.setPlaybackActive(false);
     logger.info("Clearing Discord presence");
+    if (hqplayerRepublishTimer) {
+      clearTimeout(hqplayerRepublishTimer);
+      hqplayerRepublishTimer = null;
+    }
     hqplayerStatus.stop();
     publisher.clear();
   });
@@ -197,6 +208,7 @@ function main() {
 
   process.on("SIGINT", () => {
     logger.info("Shutting down");
+    if (hqplayerRepublishTimer) clearTimeout(hqplayerRepublishTimer);
     memoryMonitor.stop();
     hqplayerStatus.stop();
     albumArtProxy.stop();

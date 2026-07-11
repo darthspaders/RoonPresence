@@ -142,6 +142,15 @@ function parseRadioTrack(metadata = {}) {
 
   return null;
 }
+
+function looksLikeRadioProgramTitle(value) {
+  const text = cleanText(value);
+  if (!text) return false;
+  const monthAndYear = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{4}\b/i;
+  return monthAndYear.test(text) ||
+    /\b(?:episode|showcase|takeover|podcast|radio\s+show|guest\s+mix|dj\s+set|live\s+set|monthly\s+mix|weekly\s+mix|mixed\s+by|with\s+[a-z0-9][\w .'-]{2,})\b/i.test(text);
+}
+
 function makeLookupKey(track) {
   return `${normalizeKeyPart(track.artist)}|${normalizeKeyPart(track.title)}`;
 }
@@ -246,14 +255,28 @@ function titleKeysMatch(leftKeys, rightKeys) {
   return leftKeys.some((left) => rightKeys.some((right) => left === right || left.includes(right) || right.includes(left)));
 }
 
+function hasArtistForLookup(track = {}) {
+  return getArtistLookupAliases(track.artist).some((artist) => normalizeDiscogsMatchText(artist));
+}
+
+function artistAliasesMatch(expectedArtist, resultArtistText) {
+  const expected = getArtistLookupAliases(expectedArtist).map(normalizeDiscogsMatchText).filter(Boolean);
+  const actual = getArtistLookupAliases(resultArtistText).map(normalizeDiscogsMatchText).filter(Boolean);
+  if (!expected.length) return true;
+  if (!actual.length) return false;
+  return expected.some((left) => actual.some((right) => (
+    left === right ||
+    (left.length >= 4 && right.length >= 4 && (left.includes(right) || right.includes(left)))
+  )));
+}
+
 function isDiscogsTrackMatch(result, track = {}) {
   const resultTitle = normalizeDiscogsMatchText(result?.title);
   const trackTitle = normalizeDiscogsMatchText(track.title);
-  const trackArtists = getArtistLookupAliases(track.artist).map(normalizeDiscogsMatchText).filter(Boolean);
 
   if (!resultTitle) return false;
   if (trackTitle && !resultTitle.includes(trackTitle)) return false;
-  if (trackArtists.length && !trackArtists.some((artist) => resultTitle.includes(artist))) return false;
+  if (!artistAliasesMatch(track.artist, result?.title)) return false;
   return true;
 }
 
@@ -443,12 +466,10 @@ function getTidalTrackUrl(item = {}) {
 function isTidalTrackMatch(item = {}, track = {}, searchJson = {}) {
   const resultTitleKeys = getTitleMatchKeys(item.title || item.attributes?.title);
   const trackTitleKeys = getTitleMatchKeys(track.title);
-  const trackArtists = getArtistLookupAliases(track.artist).map(normalizeDiscogsMatchText).filter(Boolean);
-  const resultArtist = normalizeDiscogsMatchText(getTidalArtistNames(item, searchJson).join(" "));
 
   if (!resultTitleKeys.length || !trackTitleKeys.length) return false;
   if (!titleKeysMatch(resultTitleKeys, trackTitleKeys)) return false;
-  if (trackArtists.length && resultArtist && !trackArtists.some((artist) => resultArtist.includes(artist) || artist.includes(resultArtist))) return false;
+  if (!artistAliasesMatch(track.artist, getTidalArtistNames(item, searchJson).join(" "))) return false;
   return true;
 }
 
@@ -517,10 +538,18 @@ function isTidalTitleMatch(item = {}, track = {}) {
   return !!resultTitleKeys.length && !!trackTitleKeys.length && titleKeysMatch(resultTitleKeys, trackTitleKeys);
 }
 
+function isTidalDetailCandidate(item = {}, track = {}, searchJson = {}) {
+  return hasArtistForLookup(track) &&
+    isTidalTitleMatch(item, track) &&
+    !getTidalArtistNames(item, searchJson).length &&
+    !!cleanText(item.id);
+}
+
 function chooseTidalCandidate(searchJson, track = {}) {
   const items = getTidalItems(searchJson);
   return items.find((entry) => isTidalTrackMatch(entry, track, searchJson)) ||
-    items.find((entry) => isTidalTitleMatch(entry, track) && hasTidalCoverCandidate(entry, searchJson)) ||
+    items.find((entry) => isTidalDetailCandidate(entry, track, searchJson)) ||
+    (!hasArtistForLookup(track) ? items.find((entry) => isTidalTitleMatch(entry, track) && hasTidalCoverCandidate(entry, searchJson)) : null) ||
     null;
 }
 
@@ -552,7 +581,10 @@ function buildTidalTrackResult(result, searchJson) {
 }
 
 function chooseTidalTrack(searchJson, track = {}) {
-  return buildTidalTrackResult(chooseTidalCandidate(searchJson, track), searchJson);
+  const candidate = chooseTidalCandidate(searchJson, track);
+  if (!candidate) return null;
+  if (hasArtistForLookup(track) && !isTidalTrackMatch(candidate, track, searchJson)) return null;
+  return buildTidalTrackResult(candidate, searchJson);
 }
 
 function getSpotifyItems(searchJson) {
@@ -567,14 +599,12 @@ function getSpotifyArtistNames(item = {}) {
 
 function chooseSpotifyTrack(searchJson, track = {}) {
   const trackTitleKeys = getTitleMatchKeys(track.title);
-  const trackArtist = normalizeDiscogsMatchText(track.artist);
 
   for (const item of getSpotifyItems(searchJson)) {
     const resultTitleKeys = getTitleMatchKeys(item?.name);
-    const resultArtist = normalizeDiscogsMatchText(getSpotifyArtistNames(item).join(" "));
     if (!resultTitleKeys.length || !trackTitleKeys.length) continue;
     if (!titleKeysMatch(resultTitleKeys, trackTitleKeys)) continue;
-    if (trackArtist && resultArtist && !resultArtist.includes(trackArtist) && !trackArtist.includes(resultArtist)) continue;
+    if (!artistAliasesMatch(track.artist, getSpotifyArtistNames(item).join(" "))) continue;
 
     const images = Array.isArray(item?.album?.images) ? item.album.images : [];
     const image = images.find((entry) => cleanText(entry?.url)) || null;
@@ -662,6 +692,11 @@ class RadioMetadataResolver extends EventEmitter {
     presence.metadata.radioTrackKey = key;
     presence.metadata.radioArtworkResolved = false;
     this.applyParsedTrack(presence, track);
+
+    if (looksLikeRadioProgramTitle(track.title)) {
+      presence.metadata.radioProgram = true;
+      return false;
+    }
 
     const cached = this.cache.get(key);
     if (cached?.status === "found") {
@@ -853,10 +888,12 @@ class RadioMetadataResolver extends EventEmitter {
     if (normalizedArtist && normalizedGuestlessTitle && normalizedGuestlessTitle !== normalizedTitle) searches.push(`${normalizedGuestlessTitle} ${normalizedArtist}`);
     if (normalizedArtist && normalizedGuestlessBaseTitle && normalizedGuestlessBaseTitle !== normalizedBaseTitle && normalizedGuestlessBaseTitle !== normalizedGuestlessTitle) searches.push(`${normalizedArtist} ${normalizedGuestlessBaseTitle}`);
     if (normalizedArtist && normalizedGuestlessBaseTitle && normalizedGuestlessBaseTitle !== normalizedBaseTitle && normalizedGuestlessBaseTitle !== normalizedGuestlessTitle) searches.push(`${normalizedGuestlessBaseTitle} ${normalizedArtist}`);
-    searches.push(track.title);
-    if (baseTitle && baseTitle !== track.title) searches.push(baseTitle);
-    if (guestlessTitle && guestlessTitle !== track.title) searches.push(guestlessTitle);
-    if (guestlessBaseTitle && guestlessBaseTitle !== baseTitle && guestlessBaseTitle !== guestlessTitle) searches.push(guestlessBaseTitle);
+    if (!artistAliases.length) {
+      searches.push(track.title);
+      if (baseTitle && baseTitle !== track.title) searches.push(baseTitle);
+      if (guestlessTitle && guestlessTitle !== track.title) searches.push(guestlessTitle);
+      if (guestlessBaseTitle && guestlessBaseTitle !== baseTitle && guestlessBaseTitle !== guestlessTitle) searches.push(guestlessBaseTitle);
+    }
     return Array.from(new Set(searches.map(cleanText).filter(Boolean)));
   }
 
@@ -938,7 +975,7 @@ class RadioMetadataResolver extends EventEmitter {
       const candidate = chooseTidalCandidate(searchJson, track);
       if (!candidate) continue;
 
-      let result = buildTidalTrackResult(candidate, searchJson);
+      let result = isTidalTrackMatch(candidate, track, searchJson) ? buildTidalTrackResult(candidate, searchJson) : null;
       if (!result) {
         result = await this.lookupTidalTrackDetails(candidate, track);
       }
@@ -999,6 +1036,10 @@ class RadioMetadataResolver extends EventEmitter {
 
   async searchTidalWeb(track, key) {
     if (!this.albumArtProvider?.cachePublicUrl || typeof this.fetchImpl !== "function") return null;
+    if (hasArtistForLookup(track)) {
+      this.logger?.debug?.("Skipping TIDAL web artwork for artist-qualified radio lookup: " + track.artist + " - " + track.title);
+      return null;
+    }
 
     for (const query of this.createSearchQueries(track)) {
       const searchUrl = this.createTidalWebSearchUrl(query);
@@ -1226,7 +1267,7 @@ class RadioMetadataResolver extends EventEmitter {
       searches.push({ artist: track.artist, track: track.title });
       searches.push({ q: `${track.artist} ${track.title}` });
     }
-    searches.push({ q: track.title });
+    if (!track.artist) searches.push({ q: track.title });
 
     for (const params of searches) {
       const searchUrl = new URL("https://api.discogs.com/database/search");
@@ -1265,7 +1306,7 @@ class RadioMetadataResolver extends EventEmitter {
     if (track.artist) {
       queries.push(`recording:"${track.title}" AND artist:"${track.artist}"`);
     }
-    queries.push(`recording:"${track.title}"`);
+    if (!track.artist) queries.push(`recording:"${track.title}"`);
 
     for (const query of queries) {
       const searchUrl = `https://musicbrainz.org/ws/2/recording?query=${encodeURIComponent(query)}&fmt=json&limit=5&inc=releases+artist-credits`;

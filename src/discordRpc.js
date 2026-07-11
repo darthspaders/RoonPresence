@@ -5,6 +5,10 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function cleanText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
 class DiscordRpcClient extends EventEmitter {
   constructor({ clientId, logger }) {
     super();
@@ -125,6 +129,7 @@ class DiscordRpcClient extends EventEmitter {
       timestamps.end = activity.endTimestamp;
     }
 
+    const name = cleanText(activity.name).slice(0, 128);
     const wireActivity = {
       type: activity.type,
       state: activity.state,
@@ -132,6 +137,7 @@ class DiscordRpcClient extends EventEmitter {
       timestamps: Object.keys(timestamps).length ? timestamps : undefined,
       instance: !!activity.instance
     };
+    if (name) wireActivity.name = name;
 
     if (activity.largeImageKey || activity.largeImageText) {
       wireActivity.assets = {

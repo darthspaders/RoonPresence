@@ -8,3 +8,4 @@ dist/
 .lastfm-auth-test.env
 .cache/
 assets/spotify-logo.png
+.npmrc
