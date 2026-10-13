@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const fs = require("fs");
+const { LyrionScrobbler } = require("./lyrionScrobbler");
 
 const LASTFM_API_ROOT = "https://ws.audioscrobbler.com/2.0/";
 const DEFAULT_SCROBBLE_COOLDOWN_MS = 15 * 60 * 1000;
@@ -97,6 +98,7 @@ class LastFmScrobbler {
     this.scrobbleCachePath = cleanText(scrobbleCachePath);
     this.scrobbledAtByKey = new Map();
     this.loadScrobbleCache();
+    this.lyrion = new LyrionScrobbler(this);
   }
 
   get configured() {
@@ -104,6 +106,8 @@ class LastFmScrobbler {
   }
 
   maybeScrobble(presence) {
+    if (presence?.metadata?.frontend === "lyrion") return this.lyrion.observe(presence);
+    this.lyrion.pause();
     if (!this.configured || !hasFullRadioTrack(presence)) return false;
 
     const track = {
@@ -129,6 +133,7 @@ class LastFmScrobbler {
   }
 
   flush() {
+    this.lyrion.pause();
     return false;
   }
 

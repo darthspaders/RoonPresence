@@ -1,32 +1,75 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { RoonClient, isPrivateImageUrl, zoneContentSignature } = require("../src/roonClient");
+const {
+  RoonClient,
+  getRoonImageEndpoint,
+  isPrivateImageUrl,
+  zoneContentSignature
+} = require("../src/roonClient");
 
-function createClient() {
+function createLogger() {
+  const logs = {
+    info: [],
+    warn: [],
+    error: [],
+    debug: []
+  };
+  const logger = Object.fromEntries(
+    Object.keys(logs).map((level) => [
+      level,
+      (message, meta) => logs[level].push({ message, meta })
+    ])
+  );
+
+  return { logger, logs };
+}
+
+function createClient(options = {}) {
   let now = 2_000_000;
+  const { logger, logs } = createLogger();
   const client = new RoonClient({
     roonConfig: {},
     hqplayerZoneMatch: "HQPlayer",
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    clock: () => now
+    fallbackZoneMatch: "System Output",
+    logger,
+    clock: () => now,
+    ...options
   });
 
   return {
     client,
+    logs,
     advance(ms) {
       now += ms;
     }
   };
 }
 
-function playingZone({ seek = 0, title = "Track" } = {}) {
+function playingZone({
+  zoneId = "zone-1",
+  displayName = "HQPlayer",
+  outputName = "",
+  sourceControls = [],
+  seek = 0,
+  title = "Track",
+  imageKey = ""
+} = {}) {
   return {
-    zone_id: "zone-1",
-    display_name: "HQPlayer",
+    zone_id: zoneId,
+    display_name: displayName,
     state: "playing",
+    outputs: outputName
+      ? [
+          {
+            display_name: outputName,
+            source_controls: sourceControls
+          }
+        ]
+      : [],
     now_playing: {
       length: 300,
       seek_position: seek,
+      image_key: imageKey,
       three_line: {
         line1: title,
         line2: "Artist",
@@ -77,8 +120,113 @@ test("Roon client builds album art URL from image key", () => {
 
   assert.equal(
     zone.now_playing.album_art_url,
-    "http://127.0.0.1:9100/api/image/image%2Fkey%201?scale=fill&width=512&height=512&format=image/jpeg"
+    "http://127.0.0.1:9100/api/image/image%2Fkey%201?width=512&height=512"
   );
+});
+
+test("Roon client builds album art URL from registration HTTP port fallback", () => {
+  const { client } = createClient();
+  const zone = playingZone({ imageKey: "fallback/key" });
+  client.core = {
+    registration: {
+      http_port: 9200
+    }
+  };
+
+  client.applyAlbumArtUrl(zone);
+
+  assert.deepEqual(getRoonImageEndpoint(client.core), { host: "127.0.0.1", port: 9200 });
+  assert.equal(
+    zone.now_playing.album_art_url,
+    "http://127.0.0.1:9200/api/image/fallback%2Fkey?width=512&height=512"
+  );
+});
+
+test("Roon client falls back to System Output when no HQPlayer zone is playing", () => {
+  const { client, logs } = createClient();
+  const zone = playingZone({
+    zoneId: "system-output",
+    displayName: "System Output",
+    outputName: "System Output",
+    title: "System Track",
+    imageKey: "system/key"
+  });
+  client.core = {
+    moo: {
+      transport: {
+        host: "127.0.0.1",
+        port: 9100
+      }
+    }
+  };
+
+  let emitted = null;
+  client.on("playing", (selected) => {
+    emitted = selected;
+  });
+  client.zones.set(zone.zone_id, zone);
+
+  client.evaluateActiveZone("zones_changed");
+
+  assert.equal(client.activeZoneId, "system-output");
+  assert.equal(emitted?.zone_id, "system-output");
+  assert.equal(
+    emitted?.now_playing?.album_art_url,
+    "http://127.0.0.1:9100/api/image/system%2Fkey?width=512&height=512"
+  );
+  assert.match(logs.info.map((entry) => entry.message).join("\n"), /Using fallback Roon zone: System Output/);
+});
+
+test("Roon client prefers a playing HQPlayer zone over System Output fallback", () => {
+  const { client } = createClient();
+  const systemZone = playingZone({
+    zoneId: "system-output",
+    displayName: "System Output",
+    outputName: "System Output",
+    title: "System Track"
+  });
+  const hqplayerZone = playingZone({
+    zoneId: "hqplayer",
+    displayName: "HQPlayer",
+    title: "HQPlayer Track"
+  });
+
+  let emitted = null;
+  client.on("playing", (selected) => {
+    emitted = selected;
+  });
+  client.zones.set(systemZone.zone_id, systemZone);
+  client.zones.set(hqplayerZone.zone_id, hqplayerZone);
+
+  client.evaluateActiveZone("zones_changed");
+
+  assert.equal(client.activeZoneId, "hqplayer");
+  assert.equal(emitted?.zone_id, "hqplayer");
+});
+
+test("Roon client matches HQPlayer from any output source control", () => {
+  const { client } = createClient();
+  const zone = playingZone({
+    zoneId: "source-zone",
+    displayName: "Main Room",
+    outputName: "Main Room",
+    sourceControls: [
+      { display_name: "Chromecast" },
+      { display_name: "HQPlayer" }
+    ],
+    title: "Source Control Track"
+  });
+
+  let emitted = null;
+  client.on("playing", (selected) => {
+    emitted = selected;
+  });
+  client.zones.set(zone.zone_id, zone);
+
+  client.evaluateActiveZone("zones_changed");
+
+  assert.equal(client.activeZoneId, "source-zone");
+  assert.equal(emitted?.zone_id, "source-zone");
 });
 
 test("Roon client detects private album art URLs", () => {

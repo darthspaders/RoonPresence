@@ -25,7 +25,14 @@ function firstNonEmpty(...values) {
 function formatTrackLine(title, artist) {
   const cleanTitle = cleanText(title);
   const cleanArtist = cleanText(artist);
-  return (cleanArtist ? `${cleanArtist} - ${cleanTitle}` : cleanTitle).slice(0, 128);
+  const combined=cleanArtist ? cleanArtist+" - "+cleanTitle : cleanTitle;
+  if(combined.length<=128)return combined;
+  // Discord owns layout; prioritize the track when credits exceed its field limit.
+  const shorten=(text,limit)=>text.length>limit?text.slice(0,limit-1)+"…":text;
+  if(!cleanTitle)return shorten(cleanArtist,128);
+  if(!cleanArtist)return shorten(cleanTitle,128);
+  const titlePart=shorten(cleanTitle,96);
+  return titlePart+" - "+shorten(cleanArtist,128-titlePart.length-3);
 }
 
 function normalizeTidalButtonConfig(config = {}) {
@@ -50,6 +57,21 @@ function normalizeTidalUrl(value) {
 
 function isHttpUrl(value) {
   return /^https?:\/\//i.test(String(value || ""));
+}
+
+function isPrivateHttpUrl(value) {
+  if (!isHttpUrl(value)) return false;
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "::1" ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+  } catch {
+    return true;
+  }
 }
 
 class PresencePublisher {
@@ -93,7 +115,7 @@ class PresencePublisher {
     this.lastZone = zone;
     const presence = this.mapper.mapPresence(zone);
     if (!presence) return false;
-    this.radioMetadataResolver?.apply?.(presence);
+    if (zone?.frontend !== "lyrion") this.radioMetadataResolver?.apply?.(presence);
     this.scrobbler?.maybeScrobble?.(presence);
     this.applyExternalSignalPath(presence);
 
@@ -187,7 +209,8 @@ class PresencePublisher {
     const name = this.createActivityName(presence);
     const rpcActivity = {
       type: 2,
-      details: activity.details,
+      details: [cleanText(presence.metadata?.artist), cleanText(presence.metadata?.title)].join(" - ").length > 128
+        ? formatTrackLine(presence.metadata?.title, presence.metadata?.artist) : activity.details,
       state: activity.state,
       instance: !!activity.instance
     };
@@ -230,9 +253,30 @@ class PresencePublisher {
     const publicUrl = rpcActivity.largeImageKey;
     if (!sourceUrl || !isHttpUrl(publicUrl)) return;
 
-    this.albumArtProvider
-      ?.prefetchPublicUrl?.(sourceUrl, presence.metadata?.albumArtKey || "")
-      ?.catch?.((error) => {
+    const identitySignature = this.createIdentitySignature(presence);
+    const prefetch = this.albumArtProvider?.prefetchPublicUrl?.(
+      sourceUrl,
+      presence.metadata?.albumArtKey || ""
+    );
+    if (!prefetch || typeof prefetch.then !== "function") return;
+
+    prefetch
+      .then((readyPublicUrl) => {
+        if (!readyPublicUrl || readyPublicUrl === publicUrl) return;
+        if (identitySignature !== this.lastPublishedIdentitySignature) return;
+
+        const readyActivity = {
+          ...rpcActivity,
+          largeImageKey: readyPublicUrl
+        };
+        this.logger?.info?.("Album art cache warmed; refreshing Discord presence artwork");
+        this.albumArtProvider?.updateNowPlaying?.(presence, readyActivity);
+        if (this.debugPayload) {
+          console.log("[DISCORD PAYLOAD]", JSON.stringify(readyActivity, null, 2));
+        }
+        this.discord.setActivity(readyActivity);
+      })
+      .catch((error) => {
         this.logger?.warn?.("Album art prefetch failed", { error: error.message });
       });
   }
@@ -254,6 +298,11 @@ class PresencePublisher {
   }
 
   createTidalButtonUrl(tidalUrl, query, albumArtUrl = "", presence = null) {
+    const nowUrl = isTidalBridgeMode(this.tidalButton.openMode)
+      ? this.albumArtProvider?.getPublicNowUrl?.()
+      : "";
+    if (nowUrl) return nowUrl;
+
     if (tidalUrl) {
       const bridgeUrl = isTidalBridgeMode(this.tidalButton.openMode)
         ? this.albumArtProvider?.getTidalBridgeUrl?.(tidalUrl, this.tidalButton.openMode, albumArtUrl, {
@@ -275,6 +324,7 @@ class PresencePublisher {
   }
 
   createLargeImageText(presence) {
+    if (presence.metadata?.frontend === "lyrion") return [presence.metadata.album, presence.metadata.zoneName].filter(Boolean).join(" · ").slice(0, 128);
     if (presence.timestampMode === "RADIO") {
       return cleanText(presence.metadata?.radioStationName).slice(0, 128);
     }
@@ -296,10 +346,12 @@ class PresencePublisher {
     const sourceUrl = presence.metadata?.albumArtUrl;
     if (!sourceUrl) return "";
 
-    if (presence.timestampMode === "RADIO") {
+    if (presence.timestampMode === "RADIO" && presence.metadata?.frontend !== "lyrion") {
       const albumArtKey = presence.metadata?.albumArtKey || "";
       const radioTrackKey = presence.metadata?.radioTrackKey || "";
-      if (!albumArtKey.startsWith("radio:") || albumArtKey !== `radio:${radioTrackKey}`) {
+      const isExactResolvedRadioArtwork =
+        albumArtKey.startsWith("radio:") && albumArtKey === `radio:${radioTrackKey}`;
+      if (!isExactResolvedRadioArtwork) {
         return "";
       }
     }
@@ -309,6 +361,15 @@ class PresencePublisher {
       presence.metadata?.albumArtKey || ""
     );
     if (publicUrl) return publicUrl;
+
+    if (
+      presence.timestampMode === "RADIO" &&
+      presence.metadata?.radioArtworkResolved &&
+      isHttpUrl(sourceUrl) &&
+      !isPrivateHttpUrl(sourceUrl)
+    ) {
+      return sourceUrl;
+    }
 
     const warningKey = `${presence.metadata?.albumArtKey || ""}|${sourceUrl}`;
     if (warningKey !== this.lastAlbumArtWarningKey) {

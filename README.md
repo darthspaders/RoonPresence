@@ -1,5 +1,7 @@
 # RoonPresence
 
+Current source and validation handoff: [October 2026 update](docs/october-2026-update.md).
+
 Command-line MVP for publishing the active Roon HQPlayer zone to Discord Rich Presence.
 
 ## Quick Install (Windows)
@@ -66,6 +68,7 @@ Keep this token private. Do not paste it into GitHub issues, screenshots, or com
 DISCORD_CLIENT_ID=your_discord_application_client_id
 DISCORD_DEFAULT_IMAGE_KEY=roonpresence
 HQPLAYER_ZONE_MATCH=HQPlayer
+ROON_FALLBACK_ZONE_MATCH=System Output
 HQPLAYER_SIGNAL_PATH_STATIC=
 HQPLAYER_SIGNAL_PATH_PREFIX=poly-sinc-gauss-hires-lp, PCM
 HQPLAYER_SIGNAL_PATH_COMMAND=
@@ -86,9 +89,9 @@ TIDAL_ARTWORK_LOOKUP=true
 TIDAL_COUNTRY_CODE=US
 TIDAL_CLIENT_ID=
 TIDAL_CLIENT_SECRET=
-ALBUM_ART_PUBLIC_BASE_URL=https://art.darthspader.com
-BRIDGE_USERNAME=darthspader
-BRIDGE_BRAND_NAME=darthspader.com
+ALBUM_ART_PUBLIC_BASE_URL=https://art.example.com
+BRIDGE_USERNAME=listener
+BRIDGE_BRAND_NAME=example.com
 ALBUM_ART_PROXY_PORT=8787
 ALBUM_ART_CACHE_MAX=40
 RADIO_METADATA_LOOKUP=true
@@ -113,10 +116,10 @@ npm run setup
 
 Existing values are shown in brackets. Press Enter to keep them.
 
-The setup wizard also asks for a public bridge username and brand name. For example, `BRIDGE_USERNAME=darthspader` makes your public now-playing page:
+The setup wizard also asks for a public bridge username and brand name. For example, `BRIDGE_USERNAME=listener` makes your public now-playing page:
 
 ```text
-https://art.darthspader.com/now/u/darthspader
+https://art.example.com/now/u/listener
 ```
 
 ## Public Bridge Account
@@ -212,7 +215,7 @@ Discord only shows Rich Presence buttons to other users viewing your profile; yo
 Public bridge pages use clean URLs like:
 
 ```text
-https://art.darthspader.com/tidal/track/12345
+https://art.example.com/tidal/track/12345
 ```
 
 These pages show blurred album art, foreground cover art, track title, artist, and buttons for TIDAL, Spotify search, Apple Music search, sharing, and copying the clean link. The page metadata includes Open Graph/Twitter tags so shared links get rich previews in Discord and other apps.
@@ -237,7 +240,7 @@ Roon album art lives on your local network, and Discord cannot load that private
 To show art in Discord, expose this CLI's album-art proxy with a public HTTPS URL, then set:
 
 ```env
-ALBUM_ART_PUBLIC_BASE_URL=https://art.darthspader.com
+ALBUM_ART_PUBLIC_BASE_URL=https://art.example.com
 ALBUM_ART_PROXY_PORT=8787
 ```
 
@@ -249,17 +252,17 @@ When the album-art proxy is running, RoonPresence also serves a personal now-pla
 
 ```text
 http://127.0.0.1:8787/now
-https://art.darthspader.com/now
-https://art.darthspader.com/now/u/darthspader
+https://art.example.com/now
+https://art.example.com/now/u/listener
 ```
 
-The `/now/u/darthspader` form is the recommended public/share URL when `BRIDGE_USERNAME` is set. The older `/now` URL still works as a local/default fallback.
+The `/now/u/listener` form is the recommended public/share URL when `BRIDGE_USERNAME` is set. The older `/now` URL still works as a local/default fallback.
 
 The page shows the current track, album art, artist, HQPlayer/radio line, TIDAL/Spotify/Apple Music links, and a small recently played history. It updates from the same final payload used for Discord Rich Presence and refreshes only when the current track changes. The active track does not appear in Recently Played until it is replaced or playback clears, so the history behaves like finished/listened tracks instead of duplicating Now Playing.
 
 On the `/now` page, the TIDAL button opens the resolved TIDAL track directly instead of routing through the public bridge page again. Apple Music uses a web search link to avoid mobile app sign-in prompts.
 
-The public page also exposes a dynamic share-preview image. For the default page this is `/og/now.png`; for a configured bridge user it is `/og/now/u/darthspader.png`. When `sharp` is installed, that image is rendered as a 1200x630 PNG with blurred album art, foreground cover art, branding, track title, artist, and a Now Playing label. If the optional image renderer is unavailable, RoonPresence still serves a valid fallback PNG so social preview scrapers do not hit a broken image.
+The public page also exposes a dynamic share-preview image. For the default page this is `/og/now.png`; for a configured bridge user it is `/og/now/u/listener.png`. When `sharp` is installed, that image is rendered as a 1200x630 PNG with blurred album art, foreground cover art, branding, track title, artist, and a Now Playing label. If the optional image renderer is unavailable, RoonPresence still serves a valid fallback PNG so social preview scrapers do not hit a broken image.
 
 For public access, `ALBUM_ART_PUBLIC_BASE_URL` must point to a public HTTPS tunnel or proxy that reaches `ALBUM_ART_PROXY_PORT`.
 
@@ -272,6 +275,20 @@ If lookup fails or the stream only reports station text, RoonPresence uses `DISC
 Radio stream tracks are also parsed into artist/title for the TIDAL bridge page, Last.fm scrobbling, and the `/now` feed when enough metadata is available.
 
 ## Last.fm Radio Scrobbling
+
+Lyrion playback now uses the same authenticated Last.fm service through the Rabbit
+Hole playback feed. It sends Now Playing on track changes and scrobbles after
+half the track or four minutes of observed listening, whichever comes first.
+Known tracks of 30 seconds or less are excluded; streams without a duration wait
+four minutes. Both artist and title must be available. Pauses and polling outages
+do not add listening time. It submits the metadata supplied by Lyrion, so a DJ
+mix is recorded as a mix, not as individual songs within it.
+
+Disable Lyrion's native Audioscrobbler submission when using this path to prevent
+duplicates. Rabbit Hole and Presence must be running; the browser can be closed.
+Transient submission failures are queued in the ignored runtime file
+`.lastfm-scrobble-cache.json.lyrion`, retried during playback, and survive restarts.
+Roon's existing radio behavior below is unchanged.
 
 RoonPresence can scrobble radio tracks to Last.fm, but only when the radio metadata can be parsed into both artist and track title. Title-only radio mixes, station-only text, and local library tracks are not scrobbled. A small local cooldown cache prevents the same radio track from being re-scrobbled for 15 minutes after restarting the app.
 
@@ -312,6 +329,10 @@ Use this quick pass after changes:
 ## Troubleshooting
 
 If the default app image appears instead of album art, check `ALBUM_ART_PUBLIC_BASE_URL`. Discord must be able to fetch that URL from the internet.
+
+To inspect what RoonPresence last sent to Discord, open `http://127.0.0.1:8787/debug/discord` on the RoonPresence machine. `ready` should be `true`, `lastSetActivityError` should be blank, and `lastWireActivity` should contain the current `assets.large_image` plus the `Play now` button URL.
+
+Discord hides Rich Presence buttons on your own activity card. Test the `Play now` button from a second Discord account or ask someone else to view your profile.
 
 If Roon is stuck at startup, open **Settings > Extensions** in Roon and enable **RoonPresence**.
 

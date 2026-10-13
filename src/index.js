@@ -12,10 +12,19 @@ const { AlbumArtProxy } = require("./albumArtProxy");
 const { HealthStatus } = require("./healthStatus");
 const { RadioMetadataResolver } = require("./radioMetadataResolver");
 const { LastFmScrobbler } = require("./lastFmScrobbler");
+const { acquireSingleInstanceLock } = require("./singleInstance");
+const { LyrionPresence, mapLyrionPresence } = require("./lyrionPresence");
 
 function main() {
   const config = readConfig();
   const logger = createLogger(config.logLevel);
+  const releaseSingleInstanceLock = acquireSingleInstanceLock({ logger });
+  if (!releaseSingleInstanceLock) {
+    process.exitCode = 1;
+    return;
+  }
+  process.once("exit", releaseSingleInstanceLock);
+
   const lastFmCachePath = path.join(__dirname, "..", ".lastfm-scrobble-cache.json");
   const health = new HealthStatus({ logger, config });
 
@@ -30,6 +39,8 @@ function main() {
     logger
   });
   const mapper = new PresenceMapper();
+  const mapRoonPresence = mapper.mapPresence.bind(mapper);
+  mapper.mapPresence = zone => zone?.frontend === "lyrion" ? mapLyrionPresence(zone) : mapRoonPresence(zone);
   const hqplayerStatus = new HQPlayerStatusProvider({
     command: config.hqplayer.signalPathCommand,
     staticSignalPath: config.hqplayer.signalPathStatic,
@@ -46,12 +57,24 @@ function main() {
     logger,
     persistNowPlaying: true,
     bridgeUsername: config.albumArt.bridgeUsername,
-    bridgeBrandName: config.albumArt.bridgeBrandName
+    bridgeBrandName: config.albumArt.bridgeBrandName,
+    rabbitHoleBaseUrl: config.radioMetadata.rabbitHoleBaseUrl
   });
+  albumArtProxy.setDebugStateProvider(() => discord.getDebugState());
   const radioMetadataResolver = new RadioMetadataResolver({
     enabled: config.radioMetadata.enabled,
     cacheMax: config.radioMetadata.cacheMax,
     minLookupIntervalMs: config.radioMetadata.minLookupIntervalMs,
+    rabbitHoleArtworkEnabled: config.radioMetadata.rabbitHoleArtworkEnabled,
+    rabbitHoleBaseUrl: config.radioMetadata.rabbitHoleBaseUrl,
+    rabbitHoleTimeoutMs: config.radioMetadata.rabbitHoleTimeoutMs,
+    rabbitHoleRetryDelayMs: config.radioMetadata.rabbitHoleRetryDelayMs,
+    rabbitHolePollIntervalMs: config.radioMetadata.rabbitHolePollIntervalMs,
+    rabbitHoleMaxWaitMs: config.radioMetadata.rabbitHoleMaxWaitMs,
+    spotifyArtworkEnabled: config.radioMetadata.spotifyArtworkEnabled,
+    spotifyMarket: config.radioMetadata.spotifyMarket,
+    spotifyClientId: config.radioMetadata.spotifyClientId,
+    spotifyClientSecret: config.radioMetadata.spotifyClientSecret,
     tidalArtworkEnabled: config.radioMetadata.tidalArtworkEnabled,
     tidalCountryCode: config.radioMetadata.tidalCountryCode,
     tidalAccessToken: config.radioMetadata.tidalAccessToken,
@@ -83,9 +106,14 @@ function main() {
     tidalButton: config.tidalButton,
     debugPayload: config.debugDiscordPayload
   });
+  const lyrionPresence = new LyrionPresence({
+    baseUrl: process.env.LYRION_RABBIT_HOLE_URL || config.radioMetadata.rabbitHoleBaseUrl || "http://127.0.0.1:3777",
+    publisher, signalPathProvider: hqplayerStatus
+  });
   const roon = new RoonClient({
     roonConfig: config.roon,
     hqplayerZoneMatch: config.hqplayerZoneMatch,
+    fallbackZoneMatch: config.roonFallbackZoneMatch,
     logger
   });
   const memoryMonitor = createMemoryMonitor({
@@ -103,7 +131,7 @@ function main() {
     health.update("hqplayer", "active");
     hqplayerStatus.setPlaybackActive(true);
     hqplayerStatus.start();
-    publisher.publishZone(zone);
+    lyrionPresence.roonPlaying(zone);
   });
 
   hqplayerStatus.on("signalPathChanged", () => {
@@ -150,12 +178,23 @@ function main() {
         const albumArtChanged = albumArtProxy.updateConfig({
           publicBaseUrl: freshConfig.albumArt.publicBaseUrl,
           port: freshConfig.albumArt.proxyPort,
-          cacheMax: freshConfig.albumArt.cacheMax
+          cacheMax: freshConfig.albumArt.cacheMax,
+          rabbitHoleBaseUrl: freshConfig.radioMetadata.rabbitHoleBaseUrl
         });
         const radioMetadataChanged = radioMetadataResolver.updateConfig({
           enabled: freshConfig.radioMetadata.enabled,
           cacheMax: freshConfig.radioMetadata.cacheMax,
           minLookupIntervalMs: freshConfig.radioMetadata.minLookupIntervalMs,
+          rabbitHoleArtworkEnabled: freshConfig.radioMetadata.rabbitHoleArtworkEnabled,
+          rabbitHoleBaseUrl: freshConfig.radioMetadata.rabbitHoleBaseUrl,
+          rabbitHoleTimeoutMs: freshConfig.radioMetadata.rabbitHoleTimeoutMs,
+          rabbitHoleRetryDelayMs: freshConfig.radioMetadata.rabbitHoleRetryDelayMs,
+          rabbitHolePollIntervalMs: freshConfig.radioMetadata.rabbitHolePollIntervalMs,
+          rabbitHoleMaxWaitMs: freshConfig.radioMetadata.rabbitHoleMaxWaitMs,
+          spotifyArtworkEnabled: freshConfig.radioMetadata.spotifyArtworkEnabled,
+          spotifyMarket: freshConfig.radioMetadata.spotifyMarket,
+          spotifyClientId: freshConfig.radioMetadata.spotifyClientId,
+          spotifyClientSecret: freshConfig.radioMetadata.spotifyClientSecret,
           tidalArtworkEnabled: freshConfig.radioMetadata.tidalArtworkEnabled,
           tidalCountryCode: freshConfig.radioMetadata.tidalCountryCode,
           tidalAccessToken: freshConfig.radioMetadata.tidalAccessToken,
@@ -189,6 +228,7 @@ function main() {
 
   roon.on("inactive", () => {
     health.update("roon", "inactive");
+    if (lyrionPresence.roonInactive()) return;
     health.update("hqplayer", "idle");
     hqplayerStatus.setPlaybackActive(false);
     logger.info("Clearing Discord presence");
@@ -205,16 +245,19 @@ function main() {
   if (!albumArtProxy.start()) albumArtProxy.warnIfDisabled();
   health.snapshot();
   roon.start();
+  lyrionPresence.start();
 
   process.on("SIGINT", () => {
     logger.info("Shutting down");
     if (hqplayerRepublishTimer) clearTimeout(hqplayerRepublishTimer);
     memoryMonitor.stop();
+    lyrionPresence.stop();
     hqplayerStatus.stop();
     albumArtProxy.stop();
     radioMetadataResolver.stop();
     publisher.clear();
     discord.stop();
+    releaseSingleInstanceLock();
     setTimeout(() => process.exit(0), 250);
   });
 

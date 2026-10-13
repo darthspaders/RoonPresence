@@ -2,9 +2,31 @@ const http = require("node:http");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { Readable } = require("node:stream");
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const { AlbumArtProxy, fetchBuffer, isUsablePublicBaseUrl } = require("../src/albumArtProxy");
+
+function createResponse() {
+  const chunks = [];
+  return {
+    status: 0,
+    headers: {},
+    writeHead(status, headers) {
+      this.status = status;
+      this.headers = headers || {};
+    },
+    end(chunk) {
+      if (chunk) chunks.push(Buffer.from(chunk));
+    },
+    body() {
+      return Buffer.concat(chunks).toString("utf8");
+    },
+    json() {
+      return JSON.parse(this.body());
+    }
+  };
+}
 
 test("album art proxy requires a public base URL", () => {
   assert.equal(isUsablePublicBaseUrl(""), false);
@@ -28,6 +50,169 @@ test("album art proxy returns stable public URLs without fetching immediately", 
   assert.equal(first, second);
   assert.match(first, /^https:\/\/roon-art\.example\.com\/art\/[a-f0-9]{40}\.jpg$/);
   assert.equal(fetchCount, 0);
+});
+
+test("album art bridge cache endpoint returns a stable public artwork URL", async () => {
+  const proxy = new AlbumArtProxy({
+    publicBaseUrl: "https://art.example.com",
+    fetchImage: async () => Buffer.from("image")
+  });
+  const response = createResponse();
+
+  await proxy.handleRequest({
+    method: "GET",
+    url: "/api/art/cache?url=https%3A%2F%2Fresources.tidal.com%2Fimages%2Fcover.jpg&imageKey=radio%3Aartist%7Ctrack"
+  }, response);
+
+  const body = response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.ok, true);
+  assert.match(body.url, /^https:\/\/art\.example\.com\/art\/[a-f0-9]{40}\.jpg(?:\?v=\d+)?$/);
+  assert.equal(body.imageKey, "radio:artist|track");
+  assert.equal(typeof body.deferred, "boolean");
+});
+
+test("album art bridge cache endpoint rejects private artwork sources", async () => {
+  const proxy = new AlbumArtProxy({ publicBaseUrl: "https://art.example.com" });
+  const response = createResponse();
+
+  await proxy.handleRequest({
+    method: "GET",
+    url: "/api/art/cache?url=http%3A%2F%2F127.0.0.1%3A9100%2Fimage.jpg"
+  }, response);
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(response.json(), { ok: false, error: "artwork source not allowed" });
+});
+
+test("album art bridge proxies MCP requests to Rabbit Hole", async () => {
+  const seen = [];
+  const server = http.createServer((request, response) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      seen.push({
+        method: request.method,
+        url: request.url,
+        contentType: request.headers["content-type"],
+        protocolVersion: request.headers["mcp-protocol-version"],
+        ignoredHeader: request.headers["x-ignore-me"],
+        body: Buffer.concat(chunks).toString("utf8")
+      });
+      response.writeHead(200, {
+        "content-type": "application/json; charset=utf-8",
+        "mcp-session-id": "rabbit-session",
+        "access-control-expose-headers": "mcp-session-id"
+      });
+      response.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        result: { tools: [] }
+      }));
+    });
+  });
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = server.address();
+    const proxy = new AlbumArtProxy({
+      publicBaseUrl: "https://art.example.com",
+      rabbitHoleBaseUrl: `http://127.0.0.1:${port}`
+    });
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+    const request = Readable.from([body]);
+    request.method = "POST";
+    request.url = "/mcp?token=abc";
+    request.headers = {
+      "content-type": "application/json",
+      "mcp-protocol-version": "2024-11-05",
+      "x-ignore-me": "do-not-forward"
+    };
+    const response = createResponse();
+
+    await proxy.handleRequest(request, response);
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers["content-type"], "application/json; charset=utf-8");
+    assert.equal(response.headers["mcp-session-id"], "rabbit-session");
+    assert.equal(response.headers["access-control-allow-origin"], "*");
+    assert.deepEqual(response.json(), {
+      jsonrpc: "2.0",
+      id: 1,
+      result: { tools: [] }
+    });
+    assert.deepEqual(seen, [{
+      method: "POST",
+      url: "/mcp?token=abc",
+      contentType: "application/json",
+      protocolVersion: "2024-11-05",
+      ignoredHeader: undefined,
+      body
+    }]);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("album art bridge proxies Rabbit Hole TIDAL OAuth redirects through the public host", async () => {
+  const seen = [];
+  const server = http.createServer((request, response) => {
+    seen.push({
+      method: request.method,
+      url: request.url,
+      forwardedHost: request.headers["x-forwarded-host"],
+      forwardedProto: request.headers["x-forwarded-proto"]
+    });
+    response.writeHead(302, {
+      location: "https://login.tidal.com/authorize?redirect_uri=https%3A%2F%2Fart.example.com%2Fapi%2Ftidal%2Foauth%2Fcallback",
+      "cache-control": "no-store"
+    });
+    response.end();
+  });
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = server.address();
+    const proxy = new AlbumArtProxy({
+      publicBaseUrl: "https://art.example.com",
+      rabbitHoleBaseUrl: `http://127.0.0.1:${port}`
+    });
+    const request = Readable.from([]);
+    request.method = "GET";
+    request.url = "/api/tidal/oauth/start";
+    request.headers = {
+      host: "art.example.com"
+    };
+    const response = createResponse();
+
+    await proxy.handleRequest(request, response);
+
+    assert.equal(response.status, 302);
+    assert.equal(response.headers.location, "https://login.tidal.com/authorize?redirect_uri=https%3A%2F%2Fart.example.com%2Fapi%2Ftidal%2Foauth%2Fcallback");
+    assert.deepEqual(seen, [{
+      method: "GET",
+      url: "/api/tidal/oauth/start",
+      forwardedHost: "art.example.com",
+      forwardedProto: "https"
+    }]);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("album art bridge does not proxy non-OAuth Rabbit Hole API routes", async () => {
+  const proxy = new AlbumArtProxy({
+    publicBaseUrl: "https://art.example.com",
+    rabbitHoleBaseUrl: "http://127.0.0.1:3777"
+  });
+  const response = createResponse();
+
+  await proxy.handleRequest({
+    method: "GET",
+    url: "/api/tidal/playlists"
+  }, response);
+
+  assert.equal(response.status, 404);
 });
 
 test("album art proxy returns empty URL when no public base URL is configured", () => {
@@ -80,6 +265,35 @@ test("album art fetch follows HTTP redirects", async () => {
   }
 });
 
+test("album art fetch retries Roon local image URLs without fragile conversion params", async () => {
+  const seen = [];
+  const server = http.createServer((request, response) => {
+    seen.push(request.url);
+    if (request.url.includes("scale=fill") || request.url.includes("format=image%2Fjpeg")) {
+      response.writeHead(500);
+      response.end("roon conversion failed");
+      return;
+    }
+
+    response.writeHead(200, { "content-type": "image/jpeg" });
+    response.end("local-image-bytes");
+  });
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = server.address();
+    const buffer = await fetchBuffer(`http://127.0.0.1:${port}/api/image/abc?scale=fill&width=512&height=512&format=image/jpeg`);
+
+    assert.equal(buffer.toString("utf8"), "local-image-bytes");
+    assert.deepEqual(seen, [
+      "/api/image/abc?scale=fill&width=512&height=512&format=image/jpeg",
+      "/api/image/abc?width=512&height=512"
+    ]);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 
 
 test("album art proxy can prefetch and return cached public URLs", async () => {
@@ -95,7 +309,7 @@ test("album art proxy can prefetch and return cached public URLs", async () => {
   });
 
   const publicUrl = await proxy.cachePublicUrl("https://resources.tidal.com/images/cover.jpg", "radio:artist|track");
-  assert.match(publicUrl, /^https:\/\/art\.example\.com\/art\/[a-f0-9]{40}\.jpg$/);
+  assert.match(publicUrl, /^https:\/\/art\.example\.com\/art\/[a-f0-9]{40}\.jpg\?v=\d+$/);
   assert.equal(fetchCount, 1);
 
   const sameUrl = await proxy.cachePublicUrl("https://resources.tidal.com/images/cover.jpg", "radio:artist|track");
@@ -146,7 +360,7 @@ test("album art proxy serves cached artwork from disk after restart", async () =
   assert.equal(fetchCount, 1);
 });
 
-test("album art proxy returns fallback image for stale unknown art URL", async () => {
+test("album art proxy returns a miss for stale unknown art URL", async () => {
   const proxy = new AlbumArtProxy({ publicBaseUrl: "https://art.example.com" });
   const chunks = [];
   const response = {
@@ -162,12 +376,13 @@ test("album art proxy returns fallback image for stale unknown art URL", async (
 
   await proxy.handleRequest({ url: "/art/0123456789abcdef0123456789abcdef01234567.jpg" }, response);
 
-  assert.equal(response.status, 200);
-  assert.equal(response.headers["content-type"], "image/png");
-  assert.equal(Buffer.concat(chunks).length > 1000, true);
+  assert.equal(response.status, 404);
+  assert.equal(response.headers["content-type"], "text/plain; charset=utf-8");
+  assert.equal(response.headers["cache-control"], "no-store");
+  assert.equal(Buffer.concat(chunks).toString("utf8"), "art not cached");
 });
 
-test("album art proxy returns fallback image when remembered artwork cannot be fetched", async () => {
+test("album art proxy returns a miss when remembered artwork cannot be fetched", async () => {
   const proxy = new AlbumArtProxy({
     publicBaseUrl: "https://art.example.com",
     cacheDir: fs.mkdtempSync(path.join(os.tmpdir(), "roonpresence-stale-art-")),
@@ -190,12 +405,13 @@ test("album art proxy returns fallback image when remembered artwork cannot be f
 
   await proxy.handleRequest({ url: new URL(publicUrl).pathname }, response);
 
-  assert.equal(response.status, 200);
-  assert.equal(response.headers["content-type"], "image/png");
-  assert.equal(Buffer.concat(chunks).length > 1000, true);
+  assert.equal(response.status, 404);
+  assert.equal(response.headers["content-type"], "text/plain; charset=utf-8");
+  assert.equal(response.headers["cache-control"], "no-store");
+  assert.equal(Buffer.concat(chunks).toString("utf8"), "art not cached");
 });
 
-test("now playing feed hides remembered artwork that has not been cached", async () => {
+test("now playing feed keeps bridge artwork visible while cache warms", async () => {
   const proxy = new AlbumArtProxy({
     publicBaseUrl: "https://art.example.com",
     cacheDir: fs.mkdtempSync(path.join(os.tmpdir(), "roonpresence-uncached-now-"))
@@ -235,8 +451,8 @@ test("now playing feed hides remembered artwork that has not been cached", async
 
   const html = Buffer.concat(chunks).toString("utf8");
   assert.equal(response.status, 200);
-  assert.doesNotMatch(html, new RegExp(publicUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  assert.match(html, /<img class="cover" src="\/assets\/radio-fallback\.png" alt="Album art">/);
+  assert.match(html, new RegExp(publicUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(html, /<img class="cover" src="\/assets\/radio-fallback\.png" alt="Album art">/);
 });
 
 test("album art proxy does not wrap its own public URLs again", () => {
@@ -667,6 +883,37 @@ test("album art proxy serves personal now playing feed", async () => {
   assert.match(html, /Recent tracks will appear here/);
 });
 
+test("now playing feed keeps TIDAL action with search fallback when no direct TIDAL match exists", async () => {
+  const proxy = new AlbumArtProxy({ publicBaseUrl: "https://art.example.com" });
+  proxy.updateNowPlaying(
+    {
+      timestampMode: "LOCAL",
+      activity: {
+        details: "Bedrock - Forge (Kohra Remix)",
+        state: "poly-sinc-gauss-long, SDM, DSD512"
+      },
+      metadata: {
+        title: "Forge (Kohra Remix)",
+        artist: "Bedrock",
+        signalPath: "poly-sinc-gauss-long, SDM, DSD512"
+      }
+    },
+    {
+      largeImageKey: "https://art.example.com/art/bedrock.jpg",
+      buttons: [{ label: "Play now", url: "https://art.example.com/now" }]
+    }
+  );
+
+  const response = createResponse();
+  await proxy.handleRequest({ url: "/now" }, response);
+
+  const html = response.body();
+  assert.equal(response.status, 200);
+  assert.match(html, /href="https:\/\/tidal\.com\/search\?q=Forge%20\(Kohra%20Remix\)%20Bedrock">Play on TIDAL/);
+  assert.match(html, /https:\/\/open\.spotify\.com\/search\/Forge%20\(Kohra%20Remix\)%20Bedrock/);
+  assert.match(html, /https:\/\/www\.google\.com\/search\?q=site%3Amusic\.apple\.com%20Forge%20\(Kohra%20Remix\)%20Bedrock/);
+});
+
 test("album art proxy serves namespaced now playing feed for configured bridge user", async () => {
   const proxy = new AlbumArtProxy({
     publicBaseUrl: "https://art.example.com",
@@ -906,6 +1153,30 @@ test("album art proxy derives one-shot TIDAL URL for now page from bridge button
   assert.match(html, /href="https:\/\/tidal\.com\/browse\/track\/12345">Play on TIDAL/);
 });
 
+test("album art proxy recognizes TIDAL bridge button by URL when label is generic", () => {
+  const proxy = new AlbumArtProxy({ publicBaseUrl: "https://art.example.com" });
+  proxy.updateNowPlaying(
+    {
+      timestampMode: "LOCAL",
+      activity: {
+        details: "Personal Liberation",
+        state: "Emanuel Satie, NANGHITI"
+      },
+      metadata: {
+        title: "Personal Liberation",
+        artist: "Emanuel Satie, NANGHITI"
+      }
+    },
+    {
+      largeImageKey: "https://art.example.com/art/cover.jpg",
+      buttons: [{ label: "Play now", url: "https://art.example.com/tidal/track/67890" }]
+    }
+  );
+
+  assert.equal(proxy.nowPlaying.bridgeUrl, "https://art.example.com/tidal/track/67890");
+  assert.equal(proxy.nowPlaying.tidalUrl, "https://tidal.com/browse/track/67890");
+});
+
 test("album art proxy only moves finished tracks into recent history", async () => {
   const proxy = new AlbumArtProxy({ publicBaseUrl: "https://art.example.com" });
   const presence = {
@@ -1073,5 +1344,43 @@ test("album art proxy exposes now playing version for change refresh", async () 
   assert.equal(response.headers["content-type"], "application/json; charset=utf-8");
   assert.match(state.version, /trilucid\|cheyenne \(extended mix\)/);
   assert.equal(state.updatedAt > 0, true);
+});
+
+test("album art proxy exposes Discord diagnostics with current now playing state", async () => {
+  const proxy = new AlbumArtProxy({
+    publicBaseUrl: "https://art.example.com",
+    debugStateProvider: () => ({
+      ready: true,
+      lastSetActivityError: "",
+      lastWireActivity: {
+        details: "Cheyenne (Extended Mix)",
+        assets: { large_image: "https://art.example.com/art/cover.jpg" },
+        buttons: [{ label: "Play now", url: "https://art.example.com/now/u/darthspader" }]
+      }
+    })
+  });
+  proxy.updateNowPlaying(
+    {
+      timestampMode: "RADIO",
+      activity: { details: "Cheyenne (Extended Mix)", state: "poly-sinc-gauss-hires-lp, PCM, 768kHz" },
+      metadata: { title: "Cheyenne (Extended Mix)", artist: "Trilucid" }
+    },
+    {
+      largeImageKey: "https://art.example.com/art/cover.jpg",
+      buttons: [{ label: "Play on TIDAL", url: "https://art.example.com/tidal/track/12345" }]
+    }
+  );
+  const response = createResponse();
+
+  await proxy.handleRequest({ url: "/debug/discord" }, response);
+
+  const body = response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.ok, true);
+  assert.equal(body.discord.ready, true);
+  assert.equal(body.discord.lastWireActivity.assets.large_image, "https://art.example.com/art/cover.jpg");
+  assert.equal(body.discord.lastWireActivity.buttons[0].label, "Play now");
+  assert.equal(body.nowPlaying.title, "Cheyenne (Extended Mix)");
+  assert.equal(body.nowPlaying.artist, "Trilucid");
 });
 

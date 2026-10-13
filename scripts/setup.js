@@ -11,6 +11,7 @@ const DEFAULTS = {
   DISCORD_CLIENT_ID: "",
   DISCORD_DEFAULT_IMAGE_KEY: "roonpresence",
   HQPLAYER_ZONE_MATCH: "HQPlayer",
+  ROON_FALLBACK_ZONE_MATCH: "System Output",
   HQPLAYER_SIGNAL_PATH_STATIC: "",
   HQPLAYER_SIGNAL_PATH_PREFIX: "poly-sinc-gauss-hires-mp, TPDF, PCM",
   HQPLAYER_SIGNAL_PATH_COMMAND: "",
@@ -124,6 +125,7 @@ async function main() {
     await ask(rl, values, "DISCORD_CLIENT_ID", "Discord application client ID", { required: true });
     await ask(rl, values, "DISCORD_DEFAULT_IMAGE_KEY", "Discord default image key");
     await ask(rl, values, "HQPLAYER_ZONE_MATCH", "Roon zone name to publish");
+    await ask(rl, values, "ROON_FALLBACK_ZONE_MATCH", "Fallback Roon zone name to publish");
     await ask(rl, values, "HQPLAYER_RATE_COMMAND", "HQPlayer rate command");
     await ask(rl, values, "HQPLAYER_SIGNAL_PATH_PREFIX", "HQPlayer signal path fallback/prefix");
     await ask(rl, values, "ALBUM_ART_PUBLIC_BASE_URL", "Public album art URL");

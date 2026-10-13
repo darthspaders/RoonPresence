@@ -191,3 +191,43 @@ test("discord adapter maps buttons to RPC activity", () => {
   ]);
 });
 
+test("discord adapter exposes last sent payload for diagnostics", async () => {
+  const client = new DiscordRpcClient({
+    clientId: "123",
+    clock: () => 1780446335000,
+    logger: {
+      info() {},
+      warn() {}
+    }
+  });
+  client.ready = true;
+  client.client = {
+    request: async () => ({ ok: true }),
+    clearActivity: async () => {}
+  };
+
+  await client.setActivity({
+    type: 2,
+    name: "Artist - Track",
+    details: "Track",
+    state: "Artist",
+    instance: false,
+    startTimestamp: 1780446335242,
+    endTimestamp: 1780446508242,
+    largeImageKey: "https://art.example.com/art/cover.jpg",
+    largeImageText: "Track - Artist",
+    buttons: [
+      { label: "Play now", url: "https://art.example.com/now/u/darthspader" }
+    ]
+  });
+
+  const state = client.getDebugState();
+  assert.equal(state.ready, true);
+  assert.equal(state.lastSetActivityAt, 1780446335000);
+  assert.equal(state.lastSetActivityError, "");
+  assert.equal(state.lastWireActivity.assets.large_image, "https://art.example.com/art/cover.jpg");
+  assert.deepEqual(state.lastWireActivity.buttons, [
+    { label: "Play now", url: "https://art.example.com/now/u/darthspader" }
+  ]);
+});
+

@@ -9,11 +9,17 @@ function cleanText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function cloneJson(value) {
+  if (value === undefined) return undefined;
+  return JSON.parse(JSON.stringify(value));
+}
+
 class DiscordRpcClient extends EventEmitter {
-  constructor({ clientId, logger }) {
+  constructor({ clientId, logger, clock = () => Date.now() }) {
     super();
     this.clientId = clientId;
     this.logger = logger;
+    this.clock = clock;
     this.client = null;
     this.ready = false;
     this.pendingActivity = undefined;
@@ -21,6 +27,14 @@ class DiscordRpcClient extends EventEmitter {
     this.started = false;
     this.reconnectTimer = null;
     this.loginInFlight = false;
+    this.lastActivity = null;
+    this.lastWireActivity = null;
+    this.lastSetActivityAt = 0;
+    this.lastSetActivityError = "";
+    this.lastClientError = "";
+    this.lastLoginError = "";
+    this.lastClearActivityAt = 0;
+    this.lastClearActivityError = "";
     this.createClient();
   }
 
@@ -29,6 +43,7 @@ class DiscordRpcClient extends EventEmitter {
     this.client.on("ready", () => {
       this.ready = true;
       this.loginInFlight = false;
+      this.lastLoginError = "";
       this.logger.info("Connected to Discord via discord-rpc");
       this.emit("connected");
       if (this.pendingActivity !== undefined) {
@@ -47,6 +62,7 @@ class DiscordRpcClient extends EventEmitter {
     });
 
     this.client.on("error", (error) => {
+      this.lastClientError = error.message;
       this.logger.warn("Discord RPC error", { error: error.message });
     });
   }
@@ -63,6 +79,7 @@ class DiscordRpcClient extends EventEmitter {
     this.client.login({ clientId: this.clientId }).catch((error) => {
       this.ready = false;
       this.loginInFlight = false;
+      this.lastLoginError = error.message;
       this.logger.warn("Discord RPC login failed; retrying in 5 seconds", {
         error: error.message
       });
@@ -97,6 +114,8 @@ class DiscordRpcClient extends EventEmitter {
 
     if (!currentHasEndTimestamp) {
       this.logger.info("Clearing Discord activity before publishing open-ended stream");
+      this.lastClearActivityAt = this.clock();
+      this.lastClearActivityError = "";
       return this.client.clearActivity()
         .then(() => delay(500))
         .then(() => {
@@ -104,6 +123,7 @@ class DiscordRpcClient extends EventEmitter {
           return send();
         })
         .catch((error) => {
+          this.lastClearActivityError = error.message || String(error);
           this.logger.warn("Discord local-to-radio reset failed", { error: error.message });
         });
     }
@@ -114,9 +134,18 @@ class DiscordRpcClient extends EventEmitter {
   }
 
   sendActivity(activity) {
+    const wireActivity = this.toRpcWireActivity(activity);
+    this.lastActivity = cloneJson(activity);
+    this.lastWireActivity = cloneJson(wireActivity);
+    this.lastSetActivityAt = this.clock();
+    this.lastSetActivityError = "";
+
     return this.client.request("SET_ACTIVITY", {
       pid: process.pid,
-      activity: this.toRpcWireActivity(activity)
+      activity: wireActivity
+    }).catch((error) => {
+      this.lastSetActivityError = error.message || String(error);
+      throw error;
     });
   }
 
@@ -161,9 +190,30 @@ class DiscordRpcClient extends EventEmitter {
     this.lastSentHadEndTimestamp = false;
     if (!this.ready) return Promise.resolve();
 
+    this.lastClearActivityAt = this.clock();
+    this.lastClearActivityError = "";
     return this.client.clearActivity().catch((error) => {
+      this.lastClearActivityError = error.message || String(error);
       this.logger.warn("Discord clearActivity failed", { error: error.message });
     });
+  }
+
+  getDebugState() {
+    return {
+      ready: this.ready,
+      started: this.started,
+      loginInFlight: this.loginInFlight,
+      hasPendingActivity: this.pendingActivity !== undefined,
+      lastSentHadEndTimestamp: this.lastSentHadEndTimestamp,
+      lastSetActivityAt: this.lastSetActivityAt,
+      lastSetActivityError: this.lastSetActivityError,
+      lastClientError: this.lastClientError,
+      lastLoginError: this.lastLoginError,
+      lastClearActivityAt: this.lastClearActivityAt,
+      lastClearActivityError: this.lastClearActivityError,
+      lastActivity: cloneJson(this.lastActivity),
+      lastWireActivity: cloneJson(this.lastWireActivity)
+    };
   }
 
   stop() {

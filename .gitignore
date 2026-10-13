@@ -3,9 +3,16 @@ node_modules/
 .env
 config.json
 npm-debug.log*
+*.log
+.roonpresence.lock
 dist/
 .lastfm-scrobble-cache.json
+.lastfm-scrobble-cache.json.lyrion*
 .lastfm-auth-test.env
 .cache/
 assets/spotify-logo.png
 .npmrc
+
+# Private operational records and audit output
+data/
+CODEX_CONTEXT.md

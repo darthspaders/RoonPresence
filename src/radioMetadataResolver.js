@@ -9,6 +9,23 @@ const TIDAL_TRACK_ROOT = "https://openapi.tidal.com/v2/tracks";
 const TIDAL_ALBUM_ROOT = "https://openapi.tidal.com/v2/albums";
 const TIDAL_LEGACY_SEARCH_URL = "https://api.tidal.com/v1/search/tracks";
 const TIDAL_WEB_SEARCH_BASE_URL = "https://tidal.com/search?q=";
+const DEFAULT_RABBIT_HOLE_BASE_URL = "http://127.0.0.1:3777";
+const DEFAULT_RABBIT_HOLE_TIMEOUT_MS = 1500;
+const DEFAULT_RABBIT_HOLE_RETRY_DELAY_MS = 1250;
+const DEFAULT_RABBIT_HOLE_POLL_INTERVAL_MS = 5000;
+const DEFAULT_RABBIT_HOLE_MAX_WAIT_MS = 180000;
+const TIDAL_SEARCH_INCLUDE_FALLBACKS = [
+  "tracks,albums,artists,albums.coverArt",
+  "tracks,albums,artists",
+  "tracks"
+];
+const TIDAL_TRACK_INCLUDE_FALLBACKS = [
+  "albums,artists,albums.coverArt",
+  "albums,artists",
+  "albums",
+  ""
+];
+const TIDAL_ALBUM_INCLUDE_FALLBACKS = ["coverArt", ""];
 const SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token";
 const SPOTIFY_SEARCH_URL = "https://api.spotify.com/v1/search";
 
@@ -26,6 +43,15 @@ function describeError(error) {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+function normalizeNonNegativeNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 function normalizeKeyPart(value) {
   return cleanText(value).toLowerCase();
 }
@@ -40,6 +66,14 @@ function firstText(...values) {
     if (text) return text;
   }
   return "";
+}
+
+function isHttpUrl(value) {
+  return /^https?:\/\//i.test(String(value || ""));
+}
+
+function normalizeBaseUrl(value) {
+  return cleanText(value || "").replace(/\/+$/, "");
 }
 
 function cleanStationName(value) {
@@ -255,6 +289,10 @@ function titleKeysMatch(leftKeys, rightKeys) {
   return leftKeys.some((left) => rightKeys.some((right) => left === right || left.includes(right) || right.includes(left)));
 }
 
+function titleKeysContainText(keys, haystack) {
+  return keys.some((key) => key && key.length >= 3 && haystack.includes(key));
+}
+
 function hasArtistForLookup(track = {}) {
   return getArtistLookupAliases(track.artist).some((artist) => normalizeDiscogsMatchText(artist));
 }
@@ -356,6 +394,43 @@ function firstImageUrl(value) {
   return "";
 }
 
+function artworkFileScore(file = {}) {
+  const meta = file?.meta || file?.attributes?.meta || {};
+  const width = Number(file?.width || file?.attributes?.width || meta.width || 0);
+  const height = Number(file?.height || file?.attributes?.height || meta.height || 0);
+  if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) return width * height;
+  if (Number.isFinite(width) && width > 0) return width;
+  if (Number.isFinite(height) && height > 0) return height;
+  return 0;
+}
+
+function imageUrlFromArtworkFiles(files = []) {
+  const list = Array.isArray(files) ? files : [];
+  const candidates = list
+    .map((file, index) => ({
+      url: firstImageUrl(file),
+      score: artworkFileScore(file),
+      index
+    }))
+    .filter((entry) => entry.url);
+  candidates.sort((left, right) => right.score - left.score || left.index - right.index);
+  return candidates[0]?.url || "";
+}
+
+function imageUrlFromArtworkResource(resource = {}) {
+  const attributes = resource.attributes || resource;
+  return imageUrlFromArtworkFiles(attributes.files || resource.files) ||
+    firstImageUrl([
+      attributes.media,
+      attributes.images,
+      attributes.imageLinks,
+      attributes.sources,
+      attributes.urls,
+      attributes.url,
+      attributes.href
+    ]);
+}
+
 function extractTidalWebArtwork(html) {
   const text = decodeWebText(html);
   const direct = text.match(/https?:\/\/resources\.tidal\.com\/images\/[^"'<>\s]+?\.(?:jpg|jpeg|png|webp)/i);
@@ -372,6 +447,16 @@ function extractTidalWebTrackUrl(html) {
 
   const relative = text.match(/(?:href|url)["\'\s:=]+(\/(?:browse\/)?track\/[0-9]+)/i);
   return relative ? "https://tidal.com" + relative[1] : "";
+}
+
+function tidalWebPageMatchesTrack(html, track = {}) {
+  const haystack = normalizeDiscogsMatchText(decodeWebText(html));
+  const titleKeys = getTitleMatchKeys(track.title);
+  if (!haystack || !titleKeysContainText(titleKeys, haystack)) return false;
+
+  const artistAliases = getArtistLookupAliases(track.artist).map(normalizeDiscogsMatchText).filter(Boolean);
+  if (!artistAliases.length) return true;
+  return artistAliases.some((artist) => artist.length >= 3 && haystack.includes(artist));
 }
 
 function getTidalIncluded(searchJson, type) {
@@ -421,10 +506,13 @@ function getTidalArtistNames(item = {}, searchJson = {}) {
 
 function getTidalAlbum(item = {}, searchJson = {}) {
   const flatAlbum = item.album || {};
-  if (flatAlbum.cover || flatAlbum.title || flatAlbum.attributes?.cover || flatAlbum.attributes?.imageCover) return flatAlbum;
-
   const ref = getTidalRelationshipData(item, "albums")[0] || getTidalRelationshipData(item, "album")[0];
-  return findTidalIncluded(searchJson, ref, "albums") || {};
+  const relationshipAlbum = findTidalIncluded(searchJson, ref, "albums") || {};
+  if (relationshipAlbum?.relationships?.coverArt || relationshipAlbum?.attributes?.cover || relationshipAlbum?.attributes?.imageCover) {
+    return relationshipAlbum;
+  }
+  if (flatAlbum.cover || flatAlbum.attributes?.cover || flatAlbum.attributes?.imageCover) return flatAlbum;
+  return relationshipAlbum || (flatAlbum.title || flatAlbum.attributes?.title ? flatAlbum : {});
 }
 
 function getTidalAlbumRefs(item = {}) {
@@ -440,6 +528,21 @@ function getTidalCoverArtRefs(item = {}) {
     ...getTidalRelationshipData(item, "cover_art"),
     ...getTidalRelationshipData(item, "artwork")
   ].filter((ref) => cleanText(ref?.id));
+}
+
+function getTidalCoverArtUrlFromRelationship(resource = {}, searchJson = {}) {
+  for (const ref of getTidalCoverArtRefs(resource)) {
+    const artwork =
+      findTidalIncluded(searchJson, ref, "artworks") ||
+      findTidalIncluded(searchJson, ref, "coverArt") ||
+      findTidalIncluded(searchJson, ref, "artwork");
+    const imageUrl = getTidalCoverArtUrl(artwork || {});
+    if (imageUrl) return imageUrl;
+
+    const fallback = getTidalCoverImage(ref?.id);
+    if (fallback) return fallback;
+  }
+  return "";
 }
 
 function getTidalExternalLink(item = {}) {
@@ -490,6 +593,9 @@ function getTidalCoverImage(...values) {
 }
 
 function getTidalCoverArtUrl(resource = {}) {
+  const artworkUrl = imageUrlFromArtworkResource(resource);
+  if (artworkUrl) return artworkUrl;
+
   const directUrl = firstImageUrl(resource);
   if (directUrl) return directUrl;
 
@@ -518,7 +624,9 @@ function getTidalCoverArtUrl(resource = {}) {
 
 function hasTidalCoverCandidate(item = {}, searchJson = {}) {
   const album = getTidalAlbum(item, searchJson);
-  return !!getTidalCoverImage(
+  return !!(getTidalCoverArtUrlFromRelationship(album, searchJson) ||
+    getTidalCoverArtUrlFromRelationship(item, searchJson) ||
+    getTidalCoverImage(
     album.cover,
     album.attributes?.cover,
     album.attributes?.imageCover,
@@ -529,7 +637,7 @@ function hasTidalCoverCandidate(item = {}, searchJson = {}) {
     item.attributes?.imageCover,
     item.attributes?.imageLinks,
     item.attributes?.images
-  );
+  ));
 }
 
 function isTidalTitleMatch(item = {}, track = {}) {
@@ -557,7 +665,9 @@ function buildTidalTrackResult(result, searchJson) {
   if (!result) return null;
 
   const album = getTidalAlbum(result, searchJson);
-  const coverImage = getTidalCoverImage(
+  const coverImage = getTidalCoverArtUrlFromRelationship(album, searchJson) ||
+    getTidalCoverArtUrlFromRelationship(result, searchJson) ||
+    getTidalCoverImage(
     album.cover,
     album.attributes?.cover,
     album.attributes?.imageCover,
@@ -622,6 +732,78 @@ function chooseSpotifyTrack(searchJson, track = {}) {
   return null;
 }
 
+function rabbitHoleCandidateFromValue(value = {}, nowPlaying = {}) {
+  const title = firstText(
+    value.inputTitle,
+    value.title,
+    value.trackTitle,
+    value.lookup?.title,
+    nowPlaying.three_line?.line2,
+    nowPlaying.two_line?.line2,
+    nowPlaying.one_line?.line1
+  );
+  const artist = firstText(
+    value.inputArtist,
+    value.artist,
+    value.trackArtist,
+    value.lookup?.artist,
+    nowPlaying.three_line?.line3
+  );
+  const albumArtUrl = firstText(
+    value.sourceImageUrl,
+    value.coverImage,
+    value.coverUrl,
+    value.albumArtUrl,
+    value.imageUrl
+  );
+  if (!title || !albumArtUrl) return null;
+
+  return {
+    title,
+    artist,
+    album: cleanText(value.album),
+    albumArtUrl,
+    tidalUrl: cleanText(value.tidalUrl || value.url),
+    durationMs: toDurationMs(value.durationMs),
+    confidence: Number(value.confidence || 0),
+    source: cleanText(value.source || "rabbit-hole")
+  };
+}
+
+function rabbitHoleCandidateMatchesTrack(candidate = {}, track = {}) {
+  const resultTitleKeys = getTitleMatchKeys(candidate.title);
+  const trackTitleKeys = getTitleMatchKeys(track.title);
+  if (!resultTitleKeys.length || !trackTitleKeys.length) return false;
+  if (!titleKeysMatch(resultTitleKeys, trackTitleKeys)) return false;
+  return artistAliasesMatch(track.artist, candidate.artist);
+}
+
+function isSelfReportedRabbitHoleCandidate(candidate = {}) {
+  return normalizeDiscogsMatchText(candidate.source) === "radio roonpresence";
+}
+
+function chooseRabbitHoleArtwork(statusJson = {}, track = {}) {
+  const zones = Array.isArray(statusJson?.zones) ? statusJson.zones : [];
+  const candidates = [];
+
+  for (const zone of zones) {
+    const nowPlaying = zone?.now_playing || {};
+    for (const value of [
+      nowPlaying.metadata_enrichment,
+      nowPlaying.radio_enrichment,
+      nowPlaying.radio_lookup
+    ]) {
+      const candidate = rabbitHoleCandidateFromValue(value, nowPlaying);
+      if (candidate) candidates.push(candidate);
+    }
+  }
+
+  return candidates
+    .filter((candidate) => rabbitHoleCandidateMatchesTrack(candidate, track))
+    .filter((candidate) => !isSelfReportedRabbitHoleCandidate(candidate))
+    .sort((left, right) => (right.confidence || 0) - (left.confidence || 0))[0] || null;
+}
+
 
 class RadioMetadataResolver extends EventEmitter {
   constructor({
@@ -629,6 +811,12 @@ class RadioMetadataResolver extends EventEmitter {
     cacheMax = DEFAULT_CACHE_MAX,
     minLookupIntervalMs = DEFAULT_MIN_LOOKUP_INTERVAL_MS,
     logger,
+    rabbitHoleArtworkEnabled = false,
+    rabbitHoleBaseUrl = DEFAULT_RABBIT_HOLE_BASE_URL,
+    rabbitHoleTimeoutMs = DEFAULT_RABBIT_HOLE_TIMEOUT_MS,
+    rabbitHoleRetryDelayMs = DEFAULT_RABBIT_HOLE_RETRY_DELAY_MS,
+    rabbitHolePollIntervalMs = DEFAULT_RABBIT_HOLE_POLL_INTERVAL_MS,
+    rabbitHoleMaxWaitMs = DEFAULT_RABBIT_HOLE_MAX_WAIT_MS,
     spotifyArtworkEnabled = false,
     spotifyMarket = "US",
     spotifyClientId = "",
@@ -650,6 +838,12 @@ class RadioMetadataResolver extends EventEmitter {
     this.cacheMax = Number(cacheMax) || DEFAULT_CACHE_MAX;
     this.minLookupIntervalMs = Number(minLookupIntervalMs) || DEFAULT_MIN_LOOKUP_INTERVAL_MS;
     this.logger = logger;
+    this.rabbitHoleArtworkEnabled = !!rabbitHoleArtworkEnabled;
+    this.rabbitHoleBaseUrl = normalizeBaseUrl(rabbitHoleBaseUrl || DEFAULT_RABBIT_HOLE_BASE_URL);
+    this.rabbitHoleTimeoutMs = Number(rabbitHoleTimeoutMs) || DEFAULT_RABBIT_HOLE_TIMEOUT_MS;
+    this.rabbitHoleRetryDelayMs = normalizeNonNegativeNumber(rabbitHoleRetryDelayMs, DEFAULT_RABBIT_HOLE_RETRY_DELAY_MS);
+    this.rabbitHolePollIntervalMs = normalizeNonNegativeNumber(rabbitHolePollIntervalMs, DEFAULT_RABBIT_HOLE_POLL_INTERVAL_MS);
+    this.rabbitHoleMaxWaitMs = normalizeNonNegativeNumber(rabbitHoleMaxWaitMs, DEFAULT_RABBIT_HOLE_MAX_WAIT_MS);
     this.spotifyArtworkEnabled = !!spotifyArtworkEnabled;
     this.spotifyMarket = cleanText(spotifyMarket || "US") || "US";
     this.spotifyClientId = cleanText(spotifyClientId);
@@ -673,6 +867,8 @@ class RadioMetadataResolver extends EventEmitter {
     this.inFlight = false;
     this.lastLookupAt = 0;
     this.timer = null;
+    this.rabbitHoleRetryTimers = new Map();
+    this.rabbitHoleRetryDeadlines = new Map();
   }
 
   apply(presence) {
@@ -702,6 +898,10 @@ class RadioMetadataResolver extends EventEmitter {
     if (cached?.status === "found") {
       this.applyResolvedMetadata(presence, cached.value);
       return true;
+    }
+    if (cached?.status === "deferred") {
+      this.scheduleRabbitHoleDeferredRetry(key, track);
+      return false;
     }
     if (cached?.status === "missing") return false;
 
@@ -760,7 +960,14 @@ class RadioMetadataResolver extends EventEmitter {
     this.inFlight = true;
     try {
       const value = await this.lookup(item.track, item.key);
-      this.remember(item.key, value ? { status: "found", value } : { status: "missing" });
+      if (value) {
+        this.clearRabbitHoleDeferredRetry(item.key);
+        this.remember(item.key, { status: "found", value });
+      } else if (this.scheduleRabbitHoleDeferredRetry(item.key, item.track)) {
+        this.remember(item.key, { status: "deferred" });
+      } else {
+        this.remember(item.key, { status: "missing" });
+      }
       if (value) {
         const label = item.track.artist ? `${item.track.artist} - ${item.track.title}` : item.track.title;
         this.logger?.info?.(`Resolved radio metadata: ${label}`);
@@ -768,7 +975,11 @@ class RadioMetadataResolver extends EventEmitter {
       }
     } catch (error) {
       this.logger?.debug?.("Radio metadata lookup failed", { error: describeError(error) });
-      this.remember(item.key, { status: "missing" });
+      if (this.scheduleRabbitHoleDeferredRetry(item.key, item.track)) {
+        this.remember(item.key, { status: "deferred" });
+      } else {
+        this.remember(item.key, { status: "missing" });
+      }
     } finally {
       this.pending.delete(item.key);
       this.lastLookupAt = this.clock();
@@ -778,8 +989,14 @@ class RadioMetadataResolver extends EventEmitter {
   }
 
   async lookup(track, key) {
+    const rabbitHole = await this.lookupRabbitHoleWithRetry(track, key);
+    if (rabbitHole) return rabbitHole;
+
     const tidal = await this.lookupTidal(track, key);
     if (tidal) return tidal;
+
+    const rabbitHoleAfterTidal = await this.lookupRabbitHole(track, key);
+    if (rabbitHoleAfterTidal) return rabbitHoleAfterTidal;
 
     const spotify = await this.lookupSpotify(track, key);
     if (spotify) return spotify;
@@ -814,6 +1031,124 @@ class RadioMetadataResolver extends EventEmitter {
     }
 
     return null;
+  }
+
+  async lookupRabbitHoleWithRetry(track, key) {
+    const first = await this.lookupRabbitHole(track, key);
+    if (first || !this.rabbitHoleArtworkEnabled || this.rabbitHoleRetryDelayMs <= 0) return first;
+
+    await sleep(this.rabbitHoleRetryDelayMs);
+    return this.lookupRabbitHole(track, key);
+  }
+
+  async lookupRabbitHole(track, key) {
+    if (!this.rabbitHoleArtworkEnabled || !this.rabbitHoleBaseUrl || typeof this.fetchImpl !== "function") return null;
+
+    try {
+      return await this.searchRabbitHoleStatus(track, key);
+    } catch (error) {
+      this.logger?.debug?.("Rabbit Hole artwork lookup failed", { error: describeError(error) });
+      return null;
+    }
+  }
+
+  scheduleRabbitHoleDeferredRetry(key, track) {
+    if (!this.rabbitHoleArtworkEnabled || !this.rabbitHoleBaseUrl || typeof this.fetchImpl !== "function") return false;
+    if (this.cache.get(key)?.status === "found") return false;
+    if (this.rabbitHoleRetryTimers.has(key)) return true;
+
+    const now = this.clock();
+    let deadline = this.rabbitHoleRetryDeadlines.get(key);
+    if (!deadline) {
+      deadline = now + this.rabbitHoleMaxWaitMs;
+      this.rabbitHoleRetryDeadlines.set(key, deadline);
+    }
+    if (now >= deadline || this.rabbitHoleMaxWaitMs <= 0 || this.rabbitHolePollIntervalMs <= 0) {
+      this.rabbitHoleRetryDeadlines.delete(key);
+      return false;
+    }
+
+    const waitMs = Math.min(this.rabbitHolePollIntervalMs, Math.max(0, deadline - now));
+    const timer = setTimeout(() => {
+      this.rabbitHoleRetryTimers.delete(key);
+      this.retryRabbitHoleDeferred(key, track);
+    }, waitMs);
+    timer.unref?.();
+    this.rabbitHoleRetryTimers.set(key, timer);
+    return true;
+  }
+
+  async retryRabbitHoleDeferred(key, track) {
+    if (this.cache.get(key)?.status === "found") {
+      this.clearRabbitHoleDeferredRetry(key);
+      return;
+    }
+
+    const value = await this.lookupRabbitHole(track, key);
+    if (value) {
+      this.clearRabbitHoleDeferredRetry(key);
+      this.remember(key, { status: "found", value });
+      const label = track.artist ? `${track.artist} - ${track.title}` : track.title;
+      this.logger?.info?.(`Resolved deferred Rabbit Hole radio metadata: ${label}`);
+      this.emit("metadataResolved", value);
+      return;
+    }
+
+    if (this.scheduleRabbitHoleDeferredRetry(key, track)) {
+      this.remember(key, { status: "deferred" });
+    } else {
+      this.remember(key, { status: "missing" });
+    }
+  }
+
+  clearRabbitHoleDeferredRetry(key) {
+    const timer = this.rabbitHoleRetryTimers.get(key);
+    if (timer) clearTimeout(timer);
+    this.rabbitHoleRetryTimers.delete(key);
+    this.rabbitHoleRetryDeadlines.delete(key);
+  }
+
+  async searchRabbitHoleStatus(track, key) {
+    const statusJson = await this.fetchRabbitHoleJson(`${this.rabbitHoleBaseUrl}/api/status`);
+    const result = chooseRabbitHoleArtwork(statusJson, track);
+    if (!result) return null;
+
+    const albumArtUrl = await this.prepareAlbumArtUrl(result.albumArtUrl, key);
+    if (!albumArtUrl) return null;
+
+    this.logger?.info?.("Resolved Rabbit Hole artwork: " + (track.artist ? track.artist + " - " : "") + track.title);
+    return {
+      key,
+      title: track.title,
+      artist: track.artist,
+      album: result.album,
+      albumArtUrl,
+      durationMs: result.durationMs,
+      tidalUrl: result.tidalUrl,
+      source: result.source || "rabbit-hole"
+    };
+  }
+
+  async fetchRabbitHoleJson(url) {
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    const timeout = controller
+      ? setTimeout(() => controller.abort(), this.rabbitHoleTimeoutMs)
+      : null;
+
+    try {
+      const response = await this.fetchImpl(url, {
+        headers: { accept: "application/json" },
+        ...(controller ? { signal: controller.signal } : {})
+      });
+      if (!response?.ok) {
+        const error = new Error("HTTP " + (response?.status || "unknown"));
+        error.status = response?.status;
+        throw error;
+      }
+      return response.json();
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
   }
 
   async lookupSpotify(track, key) {
@@ -961,23 +1296,39 @@ class RadioMetadataResolver extends EventEmitter {
   }
 
   async searchTidal(track, key) {
-    const webResult = await this.searchTidalWeb(track, key);
-    if (webResult) return webResult;
-    this.logger?.info?.("TIDAL web artwork not found; trying TIDAL API: " + (track.artist ? track.artist + " - " : "") + track.title);
+    this.logger?.info?.("Trying TIDAL API artwork: " + (track.artist ? track.artist + " - " : "") + track.title);
 
     for (const query of this.createSearchQueries(track)) {
       const searchUrl = new URL(`${TIDAL_SEARCH_ROOT}/${encodeURIComponent(query)}/relationships/tracks`);
       searchUrl.searchParams.set("countryCode", this.tidalCountryCode);
-      searchUrl.searchParams.set("include", "tracks,albums,artists");
       searchUrl.searchParams.set("limit", "5");
 
-      const searchJson = await this.fetchTidalSearchJson(searchUrl.toString());
+      let searchJson;
+      try {
+        searchJson = await this.fetchTidalJsonWithIncludeFallback(searchUrl, TIDAL_SEARCH_INCLUDE_FALLBACKS);
+      } catch (error) {
+        this.logger?.debug?.("TIDAL v2 artwork search failed; trying fallback sources", {
+          error: describeError(error),
+          query
+        });
+        if (Number(error?.status || 0) === 400) break;
+        continue;
+      }
+
       const candidate = chooseTidalCandidate(searchJson, track);
       if (!candidate) continue;
 
       let result = isTidalTrackMatch(candidate, track, searchJson) ? buildTidalTrackResult(candidate, searchJson) : null;
       if (!result) {
-        result = await this.lookupTidalTrackDetails(candidate, track);
+        try {
+          result = await this.lookupTidalTrackDetails(candidate, track);
+        } catch (error) {
+          this.logger?.debug?.("TIDAL v2 track detail lookup failed", {
+            error: describeError(error),
+            query
+          });
+          result = null;
+        }
       }
       if (!result) continue;
 
@@ -997,8 +1348,16 @@ class RadioMetadataResolver extends EventEmitter {
       };
     }
 
-    const legacyResult = await this.searchTidalLegacy(track, key);
+    let legacyResult = null;
+    try {
+      legacyResult = await this.searchTidalLegacy(track, key);
+    } catch (error) {
+      this.logger?.debug?.("TIDAL v1 artwork lookup failed", { error: describeError(error) });
+    }
     if (legacyResult) return legacyResult;
+
+    const webResult = await this.searchTidalWeb(track, key);
+    if (webResult) return webResult;
 
     this.logger?.info?.("TIDAL artwork not found; trying non-TIDAL fallback sources: " + (track.artist ? track.artist + " - " : "") + track.title);
     return null;
@@ -1036,10 +1395,6 @@ class RadioMetadataResolver extends EventEmitter {
 
   async searchTidalWeb(track, key) {
     if (!this.albumArtProvider?.cachePublicUrl || typeof this.fetchImpl !== "function") return null;
-    if (hasArtistForLookup(track)) {
-      this.logger?.debug?.("Skipping TIDAL web artwork for artist-qualified radio lookup: " + track.artist + " - " + track.title);
-      return null;
-    }
 
     for (const query of this.createSearchQueries(track)) {
       const searchUrl = this.createTidalWebSearchUrl(query);
@@ -1056,6 +1411,7 @@ class RadioMetadataResolver extends EventEmitter {
         continue;
       }
 
+      if (!tidalWebPageMatchesTrack(html, track)) continue;
       const coverImage = extractTidalWebArtwork(html);
       if (!coverImage) continue;
 
@@ -1097,9 +1453,8 @@ class RadioMetadataResolver extends EventEmitter {
 
     const detailUrl = new URL(`${TIDAL_TRACK_ROOT}/${encodeURIComponent(trackId)}`);
     detailUrl.searchParams.set("countryCode", this.tidalCountryCode);
-    detailUrl.searchParams.set("include", "albums,artists");
 
-    const detailJson = await this.fetchTidalSearchJson(detailUrl.toString());
+    const detailJson = await this.fetchTidalJsonWithIncludeFallback(detailUrl, TIDAL_TRACK_INCLUDE_FALLBACKS);
     const result = chooseTidalTrack(detailJson, track);
     if (result) return result;
 
@@ -1133,8 +1488,7 @@ class RadioMetadataResolver extends EventEmitter {
   async fetchTidalAlbum(albumId) {
     const albumUrl = new URL(`${TIDAL_ALBUM_ROOT}/${encodeURIComponent(albumId)}`);
     albumUrl.searchParams.set("countryCode", this.tidalCountryCode);
-    albumUrl.searchParams.set("include", "coverArt");
-    return this.fetchTidalSearchJson(albumUrl.toString());
+    return this.fetchTidalJsonWithIncludeFallback(albumUrl, TIDAL_ALBUM_INCLUDE_FALLBACKS);
   }
 
   async fetchTidalAlbumCoverImage(albumId, albumJson = {}) {
@@ -1149,8 +1503,7 @@ class RadioMetadataResolver extends EventEmitter {
     if (!refs.length && cleanText(albumId)) {
       const relUrl = new URL(`${TIDAL_ALBUM_ROOT}/${encodeURIComponent(albumId)}/relationships/coverArt`);
       relUrl.searchParams.set("countryCode", this.tidalCountryCode);
-      relUrl.searchParams.set("include", "coverArt");
-      const relJson = await this.fetchTidalSearchJson(relUrl.toString());
+      const relJson = await this.fetchTidalJsonWithIncludeFallback(relUrl, TIDAL_ALBUM_INCLUDE_FALLBACKS);
       const relCandidates = [relJson?.data, ...(Array.isArray(relJson?.included) ? relJson.included : [])];
       for (const candidate of relCandidates) {
         const coverImage = getTidalCoverArtUrl(candidate);
@@ -1159,6 +1512,36 @@ class RadioMetadataResolver extends EventEmitter {
     }
 
     return "";
+  }
+
+  async fetchTidalJsonWithIncludeFallback(url, includeValues = [""]) {
+    const baseUrl = url instanceof URL ? url : new URL(String(url));
+    let lastError = null;
+
+    for (const include of includeValues) {
+      const nextUrl = new URL(baseUrl.toString());
+      if (include) {
+        nextUrl.searchParams.set("include", include);
+      } else {
+        nextUrl.searchParams.delete("include");
+      }
+
+      try {
+        return await this.fetchTidalSearchJson(nextUrl.toString());
+      } catch (error) {
+        lastError = error;
+        if (Number(error?.status || 0) === 400) {
+          this.logger?.debug?.("TIDAL include shape rejected; retrying with simpler include", {
+            include,
+            url: nextUrl.pathname
+          });
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    throw lastError || new Error("TIDAL request failed");
   }
 
   async fetchTidalSearchJson(url) {
@@ -1246,7 +1629,7 @@ class RadioMetadataResolver extends EventEmitter {
         sourceHost = "invalid-url";
       }
       this.logger?.warn?.("Album art proxy cache failed", { error: describeError(error), sourceHost });
-      return "";
+      return this.albumArtProvider?.getPublicUrl?.(cleanUrl, `radio:${key}`) || "";
     }
   }
 
@@ -1328,10 +1711,22 @@ class RadioMetadataResolver extends EventEmitter {
     }
   }
 
-  updateConfig({ enabled, cacheMax, minLookupIntervalMs, spotifyArtworkEnabled, spotifyMarket, spotifyClientId, spotifyClientSecret, tidalArtworkEnabled, tidalCountryCode, tidalSearchBaseUrl, tidalAccessToken, tidalClientId, tidalClientSecret, discogsEnabled, discogsToken, albumArtProvider } = {}) {
+  updateConfig({ enabled, cacheMax, minLookupIntervalMs, rabbitHoleArtworkEnabled, rabbitHoleBaseUrl, rabbitHoleTimeoutMs, rabbitHoleRetryDelayMs, rabbitHolePollIntervalMs, rabbitHoleMaxWaitMs, spotifyArtworkEnabled, spotifyMarket, spotifyClientId, spotifyClientSecret, tidalArtworkEnabled, tidalCountryCode, tidalSearchBaseUrl, tidalAccessToken, tidalClientId, tidalClientSecret, discogsEnabled, discogsToken, albumArtProvider } = {}) {
     const nextEnabled = enabled !== undefined ? !!enabled : this.enabled;
     const nextCacheMax = Number(cacheMax) || this.cacheMax;
     const nextMinLookupIntervalMs = Number(minLookupIntervalMs) || this.minLookupIntervalMs;
+    const nextRabbitHoleArtworkEnabled = rabbitHoleArtworkEnabled !== undefined ? !!rabbitHoleArtworkEnabled : this.rabbitHoleArtworkEnabled;
+    const nextRabbitHoleBaseUrl = rabbitHoleBaseUrl !== undefined ? normalizeBaseUrl(rabbitHoleBaseUrl || DEFAULT_RABBIT_HOLE_BASE_URL) : this.rabbitHoleBaseUrl;
+    const nextRabbitHoleTimeoutMs = Number(rabbitHoleTimeoutMs) || this.rabbitHoleTimeoutMs;
+    const nextRabbitHoleRetryDelayMs = rabbitHoleRetryDelayMs !== undefined
+      ? normalizeNonNegativeNumber(rabbitHoleRetryDelayMs, this.rabbitHoleRetryDelayMs)
+      : this.rabbitHoleRetryDelayMs;
+    const nextRabbitHolePollIntervalMs = rabbitHolePollIntervalMs !== undefined
+      ? normalizeNonNegativeNumber(rabbitHolePollIntervalMs, this.rabbitHolePollIntervalMs)
+      : this.rabbitHolePollIntervalMs;
+    const nextRabbitHoleMaxWaitMs = rabbitHoleMaxWaitMs !== undefined
+      ? normalizeNonNegativeNumber(rabbitHoleMaxWaitMs, this.rabbitHoleMaxWaitMs)
+      : this.rabbitHoleMaxWaitMs;
     const nextSpotifyArtworkEnabled = spotifyArtworkEnabled !== undefined ? !!spotifyArtworkEnabled : this.spotifyArtworkEnabled;
     const nextSpotifyMarket = spotifyMarket !== undefined ? cleanText(spotifyMarket || "US") || "US" : this.spotifyMarket;
     const nextSpotifyClientId = spotifyClientId !== undefined ? cleanText(spotifyClientId) : this.spotifyClientId;
@@ -1349,6 +1744,16 @@ class RadioMetadataResolver extends EventEmitter {
       nextEnabled !== this.enabled ||
       nextCacheMax !== this.cacheMax ||
       nextMinLookupIntervalMs !== this.minLookupIntervalMs ||
+      nextRabbitHoleArtworkEnabled !== this.rabbitHoleArtworkEnabled ||
+      nextRabbitHoleBaseUrl !== this.rabbitHoleBaseUrl ||
+      nextRabbitHoleTimeoutMs !== this.rabbitHoleTimeoutMs ||
+      nextRabbitHoleRetryDelayMs !== this.rabbitHoleRetryDelayMs ||
+      nextRabbitHolePollIntervalMs !== this.rabbitHolePollIntervalMs ||
+      nextRabbitHoleMaxWaitMs !== this.rabbitHoleMaxWaitMs ||
+      nextSpotifyArtworkEnabled !== this.spotifyArtworkEnabled ||
+      nextSpotifyMarket !== this.spotifyMarket ||
+      nextSpotifyClientId !== this.spotifyClientId ||
+      nextSpotifyClientSecret !== this.spotifyClientSecret ||
       nextTidalArtworkEnabled !== this.tidalArtworkEnabled ||
       nextTidalCountryCode !== this.tidalCountryCode ||
       nextTidalAccessToken !== this.tidalAccessToken ||
@@ -1363,6 +1768,17 @@ class RadioMetadataResolver extends EventEmitter {
     this.enabled = nextEnabled;
     this.cacheMax = nextCacheMax;
     this.minLookupIntervalMs = nextMinLookupIntervalMs;
+    this.rabbitHoleArtworkEnabled = nextRabbitHoleArtworkEnabled;
+    this.rabbitHoleBaseUrl = nextRabbitHoleBaseUrl;
+    this.rabbitHoleTimeoutMs = nextRabbitHoleTimeoutMs;
+    this.rabbitHoleRetryDelayMs = nextRabbitHoleRetryDelayMs;
+    this.rabbitHolePollIntervalMs = nextRabbitHolePollIntervalMs;
+    this.rabbitHoleMaxWaitMs = nextRabbitHoleMaxWaitMs;
+    this.spotifyArtworkEnabled = nextSpotifyArtworkEnabled;
+    this.spotifyMarket = nextSpotifyMarket;
+    this.spotifyClientId = nextSpotifyClientId;
+    this.spotifyClientSecret = nextSpotifyClientSecret;
+    this.spotifyToken = null;
     this.tidalArtworkEnabled = nextTidalArtworkEnabled;
     this.tidalCountryCode = nextTidalCountryCode;
     this.tidalAccessToken = nextTidalAccessToken;
@@ -1372,6 +1788,7 @@ class RadioMetadataResolver extends EventEmitter {
     this.discogsEnabled = nextDiscogsEnabled;
     this.discogsToken = nextDiscogsToken;
     this.albumArtProvider = nextAlbumArtProvider;
+    this.clearRabbitHoleDeferredRetries();
     this.cache.clear();
     return true;
   }
@@ -1381,6 +1798,15 @@ class RadioMetadataResolver extends EventEmitter {
     this.timer = null;
     this.queue = [];
     this.pending.clear();
+    this.clearRabbitHoleDeferredRetries();
+  }
+
+  clearRabbitHoleDeferredRetries() {
+    for (const timer of this.rabbitHoleRetryTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.rabbitHoleRetryTimers.clear();
+    this.rabbitHoleRetryDeadlines.clear();
   }
 }
 
@@ -1392,6 +1818,7 @@ module.exports = {
   chooseRelease,
   chooseDiscogsResult,
   chooseTidalTrack,
+  chooseRabbitHoleArtwork,
   tidalCoverUrlFromUuid,
   extractTidalWebArtwork,
   stripGuestCredit,

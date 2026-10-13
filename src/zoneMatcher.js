@@ -15,7 +15,7 @@ function makeZoneMatcher(pattern) {
       ...(zone?.outputs || []).flatMap((output) => [
         output?.display_name,
         output?.zone_name,
-        output?.source_controls?.[0]?.display_name
+        ...(output?.source_controls || []).map((control) => control?.display_name)
       ])
     ].map(normalize);
 

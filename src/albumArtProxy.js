@@ -3,6 +3,7 @@ const fs = require("fs");
 const http = require("http");
 const https = require("https");
 const path = require("path");
+const { Readable } = require("stream");
 const zlib = require("zlib");
 
 const DEFAULT_ALBUM_ART_PROXY_PORT = 8787;
@@ -23,6 +24,34 @@ const assetBuffers = new Map();
 const DEFAULT_NOW_HISTORY_MAX = 25;
 const OG_IMAGE_WIDTH = 1200;
 const OG_IMAGE_HEIGHT = 630;
+const MCP_PROXY_MAX_BODY_BYTES = 5 * 1024 * 1024;
+const MCP_PROXY_REQUEST_HEADERS = [
+  "accept",
+  "authorization",
+  "content-type",
+  "mcp-protocol-version",
+  "mcp-session-id"
+];
+const MCP_PROXY_RESPONSE_HEADERS = [
+  "access-control-allow-headers",
+  "access-control-allow-methods",
+  "access-control-allow-origin",
+  "access-control-expose-headers",
+  "cache-control",
+  "content-type",
+  "expires",
+  "mcp-session-id",
+  "pragma",
+  "www-authenticate"
+];
+const RABBIT_HOLE_WEB_PROXY_RESPONSE_HEADERS = [
+  "cache-control",
+  "content-type",
+  "expires",
+  "location",
+  "pragma"
+];
+const RABBIT_HOLE_TIDAL_OAUTH_PROXY_RE = /^\/api\/tidal\/oauth\/(?:start|callback)$/i;
 let sharpModule;
 
 function trimTrailingSlash(value) {
@@ -48,6 +77,158 @@ function isUsablePublicBaseUrl(value) {
 
 function isHttpUrl(value) {
   return /^https?:\/\//i.test(String(value || ""));
+}
+
+function isPrivateHost(hostname = "") {
+  const host = String(hostname || "").toLowerCase();
+  if (!host || host === "localhost" || host.endsWith(".local")) return true;
+  if (host === "::1" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80")) return true;
+  if (/^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host)) return true;
+  const private172 = /^172\.(1[6-9]|2\d|3[0-1])\./.test(host);
+  return private172;
+}
+
+function roonImageFallbackUrl(value = "") {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return "";
+  }
+  if (!isPrivateHost(url.hostname) || !/^\/api\/image\//i.test(url.pathname)) return "";
+  const before = url.search;
+  url.searchParams.delete("scale");
+  url.searchParams.delete("format");
+  return url.search !== before ? url.toString() : "";
+}
+
+function isAllowedBridgeArtworkSource(sourceUrl = "", publicBaseUrl = "") {
+  if (!isHttpUrl(sourceUrl)) return false;
+  let parsed;
+  try {
+    parsed = new URL(sourceUrl);
+  } catch {
+    return false;
+  }
+
+  if (publicBaseUrl && sourceUrl.startsWith(`${trimTrailingSlash(publicBaseUrl)}/art/`)) {
+    return /\/art\/[a-f0-9]{40}\.jpg$/i.test(parsed.pathname);
+  }
+  if (isPrivateHost(parsed.hostname)) return false;
+
+  const host = parsed.hostname.toLowerCase();
+  return host === "resources.tidal.com" ||
+    host === "images.tidal.com" ||
+    host === "coverartarchive.org" ||
+    host.endsWith(".coverartarchive.org") ||
+    host === "i.scdn.co" ||
+    host === "mosaic.scdn.co" ||
+    host.endsWith(".discogs.com") ||
+    host.endsWith(".mzstatic.com") ||
+    host === "lastfm.freetls.fastly.net" ||
+    host.endsWith(".lastfm.freetls.fastly.net") ||
+    host === "lastfm-img2.akamaized.net" ||
+    host.endsWith(".lastfm-img2.akamaized.net");
+}
+
+function readRequestBody(request, maxBytes = 64 * 1024) {
+  if (!request || typeof request.on !== "function") return Promise.resolve("");
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    request.on("data", (chunk) => {
+      const buffer = Buffer.from(chunk);
+      total += buffer.length;
+      if (total > maxBytes) {
+        reject(new Error("request body too large"));
+        request.destroy?.();
+        return;
+      }
+      chunks.push(buffer);
+    });
+    request.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    request.on("error", reject);
+  });
+}
+
+function writeJson(response, status, body, headers = {}) {
+  const text = JSON.stringify(body);
+  response.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    "content-length": Buffer.byteLength(text),
+    ...headers
+  });
+  response.end(text);
+}
+
+function mcpCorsHeaders() {
+  return {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET, POST, OPTIONS",
+    "access-control-allow-headers": "authorization, content-type, accept, mcp-protocol-version, mcp-session-id",
+    "access-control-expose-headers": "mcp-session-id"
+  };
+}
+
+function copyProxyRequestHeaders(headers = {}) {
+  const copied = {};
+  for (const name of MCP_PROXY_REQUEST_HEADERS) {
+    const value = headers[name];
+    if (value === undefined) continue;
+    copied[name] = Array.isArray(value) ? value.join(", ") : String(value);
+  }
+  return copied;
+}
+
+function copyProxyResponseHeaders(headers) {
+  const copied = {};
+  for (const name of MCP_PROXY_RESPONSE_HEADERS) {
+    const value = headers.get(name);
+    if (value) copied[name] = value;
+  }
+  return {
+    ...mcpCorsHeaders(),
+    "cache-control": "no-store",
+    ...copied
+  };
+}
+
+function copyRabbitHoleWebResponseHeaders(headers) {
+  const copied = {};
+  for (const name of RABBIT_HOLE_WEB_PROXY_RESPONSE_HEADERS) {
+    const value = headers.get(name);
+    if (value) copied[name] = value;
+  }
+  return {
+    "cache-control": "no-store",
+    ...copied
+  };
+}
+
+function forwardedRabbitHoleWebHeaders(requestHeaders = {}, publicBaseUrl = "") {
+  const headers = {
+    accept: Array.isArray(requestHeaders.accept) ? requestHeaders.accept.join(", ") : String(requestHeaders.accept || "text/html,application/xhtml+xml")
+  };
+  const host = Array.isArray(requestHeaders["x-forwarded-host"])
+    ? requestHeaders["x-forwarded-host"][0]
+    : (requestHeaders["x-forwarded-host"] || requestHeaders.host || "");
+  if (host) headers["x-forwarded-host"] = String(host);
+
+  const proto = Array.isArray(requestHeaders["x-forwarded-proto"])
+    ? requestHeaders["x-forwarded-proto"][0]
+    : requestHeaders["x-forwarded-proto"];
+  if (proto) {
+    headers["x-forwarded-proto"] = String(proto);
+  } else if (publicBaseUrl) {
+    try {
+      headers["x-forwarded-proto"] = new URL(publicBaseUrl).protocol.replace(/:$/, "") || "https";
+    } catch {
+      headers["x-forwarded-proto"] = "https";
+    }
+  }
+
+  return headers;
 }
 
 function getSharp() {
@@ -89,6 +270,13 @@ function getTidalBridgeTrackId(value) {
 function createTidalTrackUrl(trackId) {
   const id = String(trackId || "").replace(/\D/g, "");
   return id ? "https://tidal.com/browse/track/" + id : "";
+}
+
+function isTidalActivityButton(button) {
+  const label = String(button?.label || "");
+  const url = String(button?.url || "");
+  if (!isHttpUrl(url)) return false;
+  return /tidal/i.test(label) || Boolean(getTidalTrackId(url) || getTidalBridgeTrackId(url));
 }
 
 function createTidalAndroidIntent(trackId, fallbackUrl = "") {
@@ -254,6 +442,11 @@ function createMusicSearchQuery(title = "", artist = "") {
 function createSpotifySearchUrl(title = "", artist = "") {
   const query = createMusicSearchQuery(title, artist);
   return query ? "https://open.spotify.com/search/" + encodeURIComponent(query) : "https://open.spotify.com/search";
+}
+
+function createTidalSearchUrl(title = "", artist = "") {
+  const query = createMusicSearchQuery(title, artist);
+  return query ? "https://tidal.com/search?q=" + encodeURIComponent(query) : "https://tidal.com/search";
 }
 
 function createAppleMusicSearchUrl(title = "", artist = "") {
@@ -465,6 +658,41 @@ async function createNowOgImage(nowPlaying = null, fetchImage = fetchBuffer, { b
   return sharp(background).composite(composites).png().toBuffer();
 }
 
+// Runs in the public Now Playing page; text stays in the accessible DOM.
+function installNowPlayingScroll() {
+  const motion=matchMedia("(prefers-reduced-motion: reduce)");
+  const labels=[...document.querySelectorAll(".card h1, .card .artist")].map(element=>{
+    const text=document.createElement("span");text.textContent=element.textContent;
+    element.replaceChildren(text);element.classList.add("scrolling-label");element.title=text.textContent;
+    const item={element,text,key:"",animation:null};
+    const pause=()=>item.animation?.pause();
+    const resume=()=>{if(!element.matches(":hover, :focus-within"))item.animation?.play();};
+    element.addEventListener("mouseenter",pause);element.addEventListener("mouseleave",resume);
+    element.addEventListener("focusin",pause);element.addEventListener("focusout",resume);
+    return item;
+  });
+  function measure(){
+    for(const item of labels){
+      const {element,text}=item,distance=Math.max(0,text.scrollWidth-element.clientWidth);
+      const key=[element.clientWidth,distance,motion.matches].join("|");
+      if(key===item.key)continue;item.key=key;item.animation?.cancel();item.animation=null;
+      element.classList.toggle("overflows",distance>1);
+      if(distance>1)element.tabIndex=0;else element.removeAttribute("tabindex");
+      if(distance<=1||!element.clientWidth||motion.matches)continue;
+      element.scrollLeft=0;const travel=distance/28,seconds=travel*2+4;
+      item.animation=text.animate([
+        {transform:"translateX(0)",offset:0},{transform:"translateX(0)",offset:2/seconds},
+        {transform:"translateX(-"+distance+"px)",offset:(2+travel)/seconds},
+        {transform:"translateX(-"+distance+"px)",offset:(4+travel)/seconds},
+        {transform:"translateX(0)",offset:1}
+      ],{duration:seconds*1000,iterations:Infinity,easing:"linear"});
+      if(element.matches(":hover, :focus-within"))item.animation.pause();
+    }
+  }
+  const observer=new ResizeObserver(measure);labels.forEach(item=>observer.observe(item.element));
+  motion.addEventListener("change",measure);document.fonts.ready.then(measure);measure();
+}
+
 function nowPlayingHtml(nowPlaying = null, history = [], { previewImageUrl = "", pageUrl = "", brandName = "darthspader.com", stateUrl = "/now-state" } = {}) {
   const current = nowPlaying || {};
   const version = getNowVersion(nowPlaying);
@@ -474,7 +702,7 @@ function nowPlayingHtml(nowPlaying = null, history = [], { previewImageUrl = "",
   const subtitle = cleanBridgeText(current.signalPath || current.radioStationName || current.album || "");
   const artUrl = isHttpUrl(current.albumArtUrl) ? current.albumArtUrl : DEFAULT_NOW_ART_PATH;
   const bridgeUrl = isHttpUrl(current.bridgeUrl) ? current.bridgeUrl : "";
-  const tidalUrl = isHttpUrl(current.tidalUrl) ? current.tidalUrl : "";
+  const tidalUrl = isHttpUrl(current.tidalUrl) ? current.tidalUrl : createTidalSearchUrl(title, artist);
   const spotifyUrl = createSpotifySearchUrl(title, artist);
   const appleUrl = createAppleMusicWebSearchUrl(title, artist);
   const backgroundHtml = artUrl ? "<img class=\"bg\" src=\"" + htmlEscape(artUrl) + "\" alt=\"\">" : "";
@@ -506,8 +734,8 @@ function nowPlayingHtml(nowPlaying = null, history = [], { previewImageUrl = "",
     (pageUrl ? "<meta property=\"og:url\" content=\"" + htmlEscape(pageUrl) + "\">" : "") +
     "<meta property=\"og:type\" content=\"website\">" +
     "<meta property=\"og:site_name\" content=\"" + htmlEscape(brandName) + "\">" +
-    "<style>*{box-sizing:border-box}body{margin:0;min-height:100vh;background:#030304;color:#fff;font-family:system-ui,-apple-system,Segoe UI,sans-serif;padding:22px;overflow-x:hidden}.bg{position:fixed;inset:-48px;width:calc(100% + 96px);height:calc(100% + 96px);object-fit:cover;filter:blur(34px);opacity:.30;z-index:-2}body:before{content:\"\";position:fixed;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.52),rgba(0,0,0,.84));z-index:-1}.wrap{width:min(940px,100%);margin:0 auto}.brand{text-align:center;margin:8px 0 22px;font-weight:800;letter-spacing:.26em;color:rgba(190,205,255,.78)}.card{display:grid;grid-template-columns:minmax(170px,300px) 1fr;gap:28px;align-items:center;padding:26px;border:1px solid rgba(255,255,255,.12);border-radius:30px;background:linear-gradient(180deg,rgba(18,18,20,.74),rgba(8,8,10,.64));box-shadow:0 28px 100px rgba(0,0,0,.55);backdrop-filter:blur(18px)}.cover{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:22px;box-shadow:0 24px 70px rgba(0,0,0,.52)}.cover.empty{display:grid;place-items:center;background:#111;color:rgba(255,255,255,.6);font-weight:800}.eyebrow{margin:0 0 8px;color:rgba(255,255,255,.52);font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.12em}.refresh-note{margin:0 0 14px;color:rgba(255,255,255,.42);font-size:13px}.title-link{color:inherit;text-decoration:none}h1{margin:0 auto;text-align:center;text-wrap:balance;font-size:clamp(34px,7vw,64px);line-height:1.02}.artist{margin:14px auto 0;text-align:center;color:rgba(255,255,255,.68);font-size:clamp(22px,4vw,34px)}.subtitle{margin:18px auto 0;text-align:center;color:rgba(255,255,255,.56);font-size:17px;line-height:1.35}.actions{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:12px;margin-top:24px}.actions a{display:flex;align-items:center;justify-content:center;min-height:48px;border-radius:16px;border:1px solid rgba(255,255,255,.14);color:#fff;text-decoration:none;font-weight:850;background:rgba(255,255,255,.06)}.tidal{background:linear-gradient(180deg,#050505,#000)!important}.spotify{background:linear-gradient(180deg,rgba(30,215,96,.30),rgba(30,215,96,.10))!important}.apple{background:linear-gradient(135deg,#87184e,#e2145d 48%,#ff2f4f)!important}.section-title{margin:28px 0 12px;color:rgba(255,255,255,.72)}.history{display:grid;gap:10px}.history-row{display:grid;grid-template-columns:58px 1fr auto;gap:12px;align-items:center;padding:10px;border-radius:16px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.09);color:#fff;text-decoration:none}.history-row img,.history-row span{width:58px;height:58px;border-radius:10px;background:#151515;object-fit:cover}.history-row strong{display:block;font-size:15px}.history-row p{margin:3px 0 0;color:rgba(255,255,255,.56)}.history-row time{color:rgba(255,255,255,.45);font-size:13px}.empty-history{color:rgba(255,255,255,.55)}@media(max-width:720px){body{padding:16px}.card{grid-template-columns:1fr;padding:18px;gap:18px}.cover{width:min(100%,360px);margin:0 auto}.actions{grid-template-columns:1fr}.history-row{grid-template-columns:52px 1fr}.history-row time{display:none}}</style></head>" +
-    "<body>" + backgroundHtml + "<main class=\"wrap\"><div class=\"brand\">" + htmlEscape(brandName) + "</div><section class=\"card\">" + coverHtml + "<div><p class=\"eyebrow\">Now Playing</p>" + titleLinkStart + "<h1>" + htmlEscape(title) + "</h1>" + titleLinkEnd + (artist ? "<p class=\"artist\">" + htmlEscape(artist) + "</p>" : "") + (subtitle ? "<p class=\"subtitle\">" + htmlEscape(subtitle) + "</p>" : "") + "<div class=\"actions\">" + (tidalUrl ? "<a class=\"tidal\" href=\"" + htmlEscape(tidalUrl) + "\">Play on TIDAL</a>" : "") + "<a class=\"spotify\" href=\"" + htmlEscape(spotifyUrl) + "\">Spotify</a><a class=\"apple\" href=\"" + htmlEscape(appleUrl) + "\">Apple Music</a></div></div></section><h2 class=\"section-title\">Recently Played</h2><section class=\"history\">" + historyHtml + "</section></main><script>(function(){var current=" + JSON.stringify(version) + ";var stateUrl=" + JSON.stringify(stateUrl) + ";async function check(){try{var response=await fetch(stateUrl,{cache:'no-store'});if(!response.ok)return;var state=await response.json();if(state.version&&state.version!==current){window.location.reload();}}catch(error){}}setInterval(check,2000);})();</script></body></html>";
+    "<style>*{box-sizing:border-box}body{margin:0;min-height:100vh;background:#030304;color:#fff;font-family:system-ui,-apple-system,Segoe UI,sans-serif;padding:22px;overflow-x:hidden}.bg{position:fixed;inset:-48px;width:calc(100% + 96px);height:calc(100% + 96px);object-fit:cover;filter:blur(34px);opacity:.30;z-index:-2}body:before{content:\"\";position:fixed;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.52),rgba(0,0,0,.84));z-index:-1}.wrap{width:min(940px,100%);margin:0 auto}.brand{text-align:center;margin:8px 0 22px;font-weight:800;letter-spacing:.26em;color:rgba(190,205,255,.78)}.card{display:grid;grid-template-columns:minmax(170px,300px) minmax(0,1fr);gap:28px;align-items:center;padding:26px;border:1px solid rgba(255,255,255,.12);border-radius:30px;background:linear-gradient(180deg,rgba(18,18,20,.74),rgba(8,8,10,.64));box-shadow:0 28px 100px rgba(0,0,0,.55);backdrop-filter:blur(18px)}.cover{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:22px;box-shadow:0 24px 70px rgba(0,0,0,.52)}.cover.empty{display:grid;place-items:center;background:#111;color:rgba(255,255,255,.6);font-weight:800}.eyebrow{margin:0 0 8px;color:rgba(255,255,255,.52);font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.12em}.refresh-note{margin:0 0 14px;color:rgba(255,255,255,.42);font-size:13px}.title-link{color:inherit;text-decoration:none}h1{margin:0 auto;text-align:center;text-wrap:balance;font-size:clamp(34px,7vw,64px);line-height:1.02}.artist{margin:14px auto 0;text-align:center;color:rgba(255,255,255,.68);font-size:clamp(22px,4vw,34px)}.subtitle{margin:18px auto 0;text-align:center;color:rgba(255,255,255,.56);font-size:17px;line-height:1.35}.actions{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:12px;margin-top:24px}.actions a{display:flex;align-items:center;justify-content:center;min-height:48px;border-radius:16px;border:1px solid rgba(255,255,255,.14);color:#fff;text-decoration:none;font-weight:850;background:rgba(255,255,255,.06)}.tidal{background:linear-gradient(180deg,#050505,#000)!important}.spotify{background:linear-gradient(180deg,rgba(30,215,96,.30),rgba(30,215,96,.10))!important}.apple{background:linear-gradient(135deg,#87184e,#e2145d 48%,#ff2f4f)!important}.section-title{margin:28px 0 12px;color:rgba(255,255,255,.72)}.history{display:grid;gap:10px}.history-row{display:grid;grid-template-columns:58px 1fr auto;gap:12px;align-items:center;padding:10px;border-radius:16px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.09);color:#fff;text-decoration:none}.history-row img,.history-row span{width:58px;height:58px;border-radius:10px;background:#151515;object-fit:cover}.history-row strong{display:block;font-size:15px}.history-row p{margin:3px 0 0;color:rgba(255,255,255,.56)}.history-row time{color:rgba(255,255,255,.45);font-size:13px}.empty-history{color:rgba(255,255,255,.55)}@media(max-width:720px){body{padding:16px}.card{grid-template-columns:1fr;padding:18px;gap:18px}.cover{width:min(100%,360px);margin:0 auto}.actions{grid-template-columns:1fr}.history-row{grid-template-columns:52px 1fr}.history-row time{display:none}}.card>div{min-width:0}.scrolling-label{white-space:nowrap;overflow:hidden;max-width:100%;text-wrap:nowrap}.scrolling-label.overflows{text-align:left}.scrolling-label>span{display:inline-block;white-space:nowrap}.scrolling-label:focus-visible{outline:2px solid #bdcaff;outline-offset:3px}@media(prefers-reduced-motion:reduce){.scrolling-label{overflow-x:auto;scrollbar-width:thin}}</style></head>" +
+    "<body>" + backgroundHtml + "<main class=\"wrap\"><div class=\"brand\">" + htmlEscape(brandName) + "</div><section class=\"card\">" + coverHtml + "<div><p class=\"eyebrow\">Now Playing</p>" + titleLinkStart + "<h1>" + htmlEscape(title) + "</h1>" + titleLinkEnd + (artist ? "<p class=\"artist\">" + htmlEscape(artist) + "</p>" : "") + (subtitle ? "<p class=\"subtitle\">" + htmlEscape(subtitle) + "</p>" : "") + "<div class=\"actions\">" + (tidalUrl ? "<a class=\"tidal\" href=\"" + htmlEscape(tidalUrl) + "\">Play on TIDAL</a>" : "") + "<a class=\"spotify\" href=\"" + htmlEscape(spotifyUrl) + "\">Spotify</a><a class=\"apple\" href=\"" + htmlEscape(appleUrl) + "\">Apple Music</a></div></div></section><h2 class=\"section-title\">Recently Played</h2><section class=\"history\">" + historyHtml + "</section></main><script>" + "(" + installNowPlayingScroll.toString() + ")();" + "(function(){var current=" + JSON.stringify(version) + ";var stateUrl=" + JSON.stringify(stateUrl) + ";async function check(){try{var response=await fetch(stateUrl,{cache:'no-store'});if(!response.ok)return;var state=await response.json();if(state.version&&state.version!==current){window.location.reload();}}catch(error){}}setInterval(check,2000);})();</script></body></html>";
 }
 
 function fetchBuffer(url, timeoutMs = 10_000, redirectsRemaining = 5) {
@@ -528,7 +756,12 @@ function fetchBuffer(url, timeoutMs = 10_000, redirectsRemaining = 5) {
       }
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
+        const fallbackUrl = response.statusCode >= 500 ? roonImageFallbackUrl(url) : "";
         response.resume();
+        if (fallbackUrl) {
+          fetchBuffer(fallbackUrl, timeoutMs, redirectsRemaining).then(resolve, reject);
+          return;
+        }
         reject(new Error(`Image request failed with HTTP ${response.statusCode}`));
         return;
       }
@@ -556,13 +789,16 @@ class AlbumArtProxy {
     nowHistoryMax = DEFAULT_NOW_HISTORY_MAX,
     persistNowPlaying = false,
     bridgeUsername = "",
-    bridgeBrandName = ""
+    bridgeBrandName = "",
+    rabbitHoleBaseUrl = "",
+    debugStateProvider = null
   } = {}) {
     this.publicBaseUrl = trimTrailingSlash(publicBaseUrl);
     this.port = Number(port) || DEFAULT_ALBUM_ART_PROXY_PORT;
     this.cacheMax = Number(cacheMax) || DEFAULT_ALBUM_ART_CACHE_MAX;
     this.bridgeUsername = cleanUserSlug(bridgeUsername);
     this.bridgeBrandName = cleanBrandName(bridgeBrandName || this.bridgeUsername || "RoonPresence");
+    this.rabbitHoleBaseUrl = trimTrailingSlash(rabbitHoleBaseUrl);
     this.logger = logger;
     this.fetchImage = fetchImage;
     this.cacheDir = cacheDir;
@@ -579,6 +815,7 @@ class AlbumArtProxy {
       : { nowPlaying: null, nowHistory: [] };
     this.nowPlaying = nowCache.nowPlaying;
     this.nowHistory = nowCache.nowHistory;
+    this.debugStateProvider = typeof debugStateProvider === "function" ? debugStateProvider : null;
     this.server = null;
     this.entries = new Map();
     for (const [id, entry] of Object.entries(this.artCacheManifest)) {
@@ -616,14 +853,18 @@ class AlbumArtProxy {
     );
   }
 
-  updateConfig({ publicBaseUrl, port, cacheMax } = {}) {
+  updateConfig({ publicBaseUrl, port, cacheMax, rabbitHoleBaseUrl } = {}) {
     const nextPublicBaseUrl = trimTrailingSlash(publicBaseUrl);
     const nextPort = Number(port) || DEFAULT_ALBUM_ART_PROXY_PORT;
     const nextCacheMax = Number(cacheMax) || DEFAULT_ALBUM_ART_CACHE_MAX;
+    const nextRabbitHoleBaseUrl = rabbitHoleBaseUrl === undefined
+      ? this.rabbitHoleBaseUrl
+      : trimTrailingSlash(rabbitHoleBaseUrl);
     const changed =
       nextPublicBaseUrl !== this.publicBaseUrl ||
       nextPort !== this.port ||
-      nextCacheMax !== this.cacheMax;
+      nextCacheMax !== this.cacheMax ||
+      nextRabbitHoleBaseUrl !== this.rabbitHoleBaseUrl;
 
     if (!changed) return false;
 
@@ -632,6 +873,7 @@ class AlbumArtProxy {
     this.publicBaseUrl = nextPublicBaseUrl;
     this.port = nextPort;
     this.cacheMax = nextCacheMax;
+    this.rabbitHoleBaseUrl = nextRabbitHoleBaseUrl;
     this.entries.clear();
     for (const [id, entry] of Object.entries(this.artCacheManifest)) {
       this.entries.set(id, { sourceUrl: entry.sourceUrl, buffer: null, fetchedAt: entry.fetchedAt });
@@ -644,6 +886,10 @@ class AlbumArtProxy {
     }
 
     return true;
+  }
+
+  setDebugStateProvider(provider) {
+    this.debugStateProvider = typeof provider === "function" ? provider : null;
   }
 
   stop() {
@@ -660,7 +906,14 @@ class AlbumArtProxy {
 
     const id = this.createId(sourceUrl, imageKey);
     this.remember(id, sourceUrl);
-    return `${this.publicBaseUrl}/art/${id}.jpg`;
+    return this.createPublicArtUrl(id, this.getCachedArtVersion(id));
+  }
+
+  createPublicArtUrl(id, version = 0) {
+    if (!id) return "";
+    const baseUrl = `${this.publicBaseUrl}/art/${id}.jpg`;
+    const cleanVersion = Number(version) || 0;
+    return cleanVersion > 0 ? `${baseUrl}?v=${encodeURIComponent(String(cleanVersion))}` : baseUrl;
   }
 
   getTidalBridgeUrl(tidalUrl, mode = "bridge", albumArtUrl = "", track = {}) {
@@ -742,7 +995,7 @@ class AlbumArtProxy {
 
     const albumArtUrl = isHttpUrl(rpcActivity.largeImageKey) ? rpcActivity.largeImageKey : "";
     const tidalButton = Array.isArray(rpcActivity.buttons)
-      ? rpcActivity.buttons.find((button) => /tidal/i.test(button?.label || "") && isHttpUrl(button?.url || ""))
+      ? rpcActivity.buttons.find((button) => isTidalActivityButton(button))
       : null;
     const bridgeUrl = tidalButton?.url || "";
     const directTidalUrl =
@@ -802,7 +1055,10 @@ class AlbumArtProxy {
 
     const id = this.getOwnPublicArtId(publicUrl);
     const entry = id ? this.entries.get(id) : null;
-    if (entry) await this.ensureCachedArt(id, entry);
+    if (entry) {
+      await this.ensureCachedArt(id, entry);
+      return this.createPublicArtUrl(id, entry.fetchedAt);
+    }
     return publicUrl;
   }
 
@@ -825,8 +1081,20 @@ class AlbumArtProxy {
   getOwnPublicArtId(value) {
     const url = String(value || "");
     if (!this.enabled || !url.startsWith(`${this.publicBaseUrl}/art/`)) return "";
-    const match = /\/art\/([a-f0-9]{40})\.jpg$/i.exec(url);
+    let pathname = "";
+    try {
+      pathname = new URL(url).pathname;
+    } catch {
+      pathname = url;
+    }
+    const match = /\/art\/([a-f0-9]{40})\.jpg$/i.exec(pathname);
     return match ? match[1] : "";
+  }
+
+  getCachedArtVersion(id) {
+    const entry = this.entries.get(id);
+    if (!this.hasCachedArt(id, entry)) return 0;
+    return Number(entry?.fetchedAt || this.artCacheManifest[id]?.fetchedAt || 0) || 0;
   }
 
   remember(id, sourceUrl) {
@@ -915,13 +1183,17 @@ class AlbumArtProxy {
     response.end(fallbackBuffer);
   }
 
+  serveMissingArt(response) {
+    response.writeHead(404, {
+      "content-type": "text/plain; charset=utf-8",
+      "cache-control": "no-store"
+    });
+    response.end("art not cached");
+  }
+
   getDisplayAlbumArtUrl(albumArtUrl) {
     if (!isHttpUrl(albumArtUrl)) return "";
-    const id = this.getOwnPublicArtId(albumArtUrl);
-    if (!id) return albumArtUrl;
-    const entry = this.entries.get(id);
-    if (this.hasCachedArt(id, entry)) return albumArtUrl;
-    return DEFAULT_NOW_ART_PATH;
+    return albumArtUrl;
   }
 
   getDisplayNowItem(item) {
@@ -932,10 +1204,195 @@ class AlbumArtProxy {
     };
   }
 
+  async handleArtCacheRequest(request, response, parsedUrl) {
+    const method = String(request.method || "GET").toUpperCase();
+    if (method !== "GET" && method !== "POST") {
+      writeJson(response, 405, { ok: false, error: "method not allowed" }, { allow: "GET, POST" });
+      return;
+    }
+
+    let payload = {};
+    if (method === "POST") {
+      const body = await readRequestBody(request);
+      try {
+        payload = body ? JSON.parse(body) : {};
+      } catch {
+        writeJson(response, 400, { ok: false, error: "invalid json" });
+        return;
+      }
+    }
+
+    const sourceUrl = String(
+      payload.sourceUrl ||
+      payload.url ||
+      payload.albumArtUrl ||
+      parsedUrl.searchParams.get("sourceUrl") ||
+      parsedUrl.searchParams.get("url") ||
+      parsedUrl.searchParams.get("art") ||
+      ""
+    ).trim();
+    const title = cleanBridgeText(payload.title || parsedUrl.searchParams.get("title") || "");
+    const artist = cleanBridgeText(payload.artist || parsedUrl.searchParams.get("artist") || "");
+    const imageKey = cleanBridgeText(
+      payload.imageKey ||
+      parsedUrl.searchParams.get("imageKey") ||
+      (artist || title ? `bridge:${artist}|${title}` : "")
+    );
+
+    if (!this.enabled) {
+      writeJson(response, 503, { ok: false, error: "album art bridge disabled" });
+      return;
+    }
+    if (!isAllowedBridgeArtworkSource(sourceUrl, this.publicBaseUrl)) {
+      writeJson(response, 400, { ok: false, error: "artwork source not allowed" });
+      return;
+    }
+
+    const publicUrl = this.getPublicUrl(sourceUrl, imageKey);
+    const id = this.getOwnPublicArtId(publicUrl);
+    const cached = Boolean(id && this.hasCachedArt(id, this.entries.get(id)));
+    this.prefetchPublicUrl(sourceUrl, imageKey).catch(() => {});
+
+    writeJson(response, 200, {
+      ok: true,
+      url: publicUrl,
+      imageKey,
+      cached,
+      deferred: !cached
+    });
+  }
+
+  async handleMcpProxyRequest(request, response, parsedUrl) {
+    if (!this.rabbitHoleBaseUrl) {
+      writeJson(response, 503, {
+        ok: false,
+        error: "Rabbit Hole MCP upstream is not configured"
+      }, mcpCorsHeaders());
+      return;
+    }
+
+    const targetUrl = `${this.rabbitHoleBaseUrl}${parsedUrl.pathname}${parsedUrl.search}`;
+    const method = String(request.method || "GET").toUpperCase();
+    const body = method === "GET" || method === "HEAD"
+      ? undefined
+      : await readRequestBody(request, MCP_PROXY_MAX_BODY_BYTES);
+
+    let upstream;
+    try {
+      upstream = await fetch(targetUrl, {
+        method,
+        headers: copyProxyRequestHeaders(request.headers || {}),
+        body
+      });
+    } catch (error) {
+      this.logger?.warn?.("Rabbit Hole MCP proxy failed", {
+        targetUrl,
+        error: error.message
+      });
+      writeJson(response, 502, {
+        ok: false,
+        error: "Rabbit Hole MCP upstream unavailable",
+        detail: error.message
+      }, mcpCorsHeaders());
+      return;
+    }
+
+    response.writeHead(upstream.status, copyProxyResponseHeaders(upstream.headers));
+    if (method === "HEAD" || !upstream.body) {
+      response.end();
+      return;
+    }
+
+    if (Readable.fromWeb && typeof response.write === "function") {
+      await new Promise((resolve, reject) => {
+        const stream = Readable.fromWeb(upstream.body);
+        stream.on("error", reject);
+        response.on?.("error", reject);
+        response.on?.("finish", resolve);
+        stream.pipe(response);
+      });
+      return;
+    }
+
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    response.end(buffer);
+  }
+
+  async handleRabbitHoleTidalOAuthProxyRequest(request, response, parsedUrl) {
+    if (!this.rabbitHoleBaseUrl) {
+      writeJson(response, 503, {
+        ok: false,
+        error: "Rabbit Hole upstream is not configured"
+      });
+      return;
+    }
+
+    const method = String(request.method || "GET").toUpperCase();
+    if (method !== "GET" && method !== "HEAD") {
+      writeJson(response, 405, { ok: false, error: "method not allowed" });
+      return;
+    }
+
+    const targetUrl = `${this.rabbitHoleBaseUrl}${parsedUrl.pathname}${parsedUrl.search}`;
+    let upstream;
+    try {
+      upstream = await fetch(targetUrl, {
+        method,
+        redirect: "manual",
+        headers: forwardedRabbitHoleWebHeaders(request.headers || {}, this.publicBaseUrl)
+      });
+    } catch (error) {
+      this.logger?.warn?.("Rabbit Hole TIDAL OAuth proxy failed", {
+        targetUrl,
+        error: error.message
+      });
+      writeJson(response, 502, {
+        ok: false,
+        error: "Rabbit Hole upstream unavailable",
+        detail: error.message
+      });
+      return;
+    }
+
+    response.writeHead(upstream.status, copyRabbitHoleWebResponseHeaders(upstream.headers));
+    if (method === "HEAD" || !upstream.body) {
+      response.end();
+      return;
+    }
+
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    response.end(buffer);
+  }
+
   async handleRequest(request, response) {
     const parsedUrl = new URL(request.url || "/", "http://localhost");
     const requestPath = parsedUrl.pathname;
     const albumArtUrl = parsedUrl.searchParams.get("art") || "";
+
+    if (requestPath === "/mcp" || requestPath === "/mcp/") {
+      await this.handleMcpProxyRequest(request, response, parsedUrl);
+      return;
+    }
+
+    if (RABBIT_HOLE_TIDAL_OAUTH_PROXY_RE.test(requestPath)) {
+      await this.handleRabbitHoleTidalOAuthProxyRequest(request, response, parsedUrl);
+      return;
+    }
+
+    if (requestPath === "/debug/discord") {
+      writeJson(response, 200, {
+        ok: true,
+        discord: this.debugStateProvider ? this.debugStateProvider() : null,
+        nowPlaying: this.getDisplayNowItem(this.nowPlaying),
+        updatedAt: Date.now()
+      });
+      return;
+    }
+
+    if (requestPath === "/api/art/cache") {
+      await this.handleArtCacheRequest(request, response, parsedUrl);
+      return;
+    }
 
     if (ASSET_PATHS[requestPath]) {
       const logoBuffer = getAssetBuffer(ASSET_PATHS[requestPath]);
@@ -1084,6 +1541,7 @@ class AlbumArtProxy {
     if (requestPath === "/now-state" || nowStateUserMatches) {
       const body = JSON.stringify({
         version: getNowVersion(this.nowPlaying),
+        nowPlaying: this.getDisplayNowItem(this.nowPlaying),
         updatedAt: this.nowPlaying?.updatedAt || 0
       });
       response.writeHead(200, {
@@ -1104,7 +1562,7 @@ class AlbumArtProxy {
 
     const entry = this.entries.get(match[1]);
     if (!entry) {
-      this.serveFallbackArt(response);
+      this.serveMissingArt(response);
       return;
     }
 
@@ -1117,7 +1575,7 @@ class AlbumArtProxy {
         error: error.message,
         sourceUrl: entry.sourceUrl
       });
-      this.serveFallbackArt(response);
+      this.serveMissingArt(response);
       return;
     }
 

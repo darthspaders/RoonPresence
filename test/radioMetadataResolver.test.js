@@ -4,6 +4,7 @@ const {
   RadioMetadataResolver,
   chooseCoverImage,
   chooseDiscogsResult,
+  chooseRabbitHoleArtwork,
   chooseTidalTrack,
   tidalCoverUrlFromUuid,
   extractTidalWebArtwork,
@@ -213,6 +214,387 @@ test("resolver can use Spotify artwork when explicitly enabled and TIDAL is disa
   ]);
 });
 
+test("resolver uses Rabbit Hole enriched artwork for the current radio track", async () => {
+  const cached = [];
+  const requested = [];
+  const resolver = new RadioMetadataResolver({
+    tidalArtworkEnabled: false,
+    discogsEnabled: false,
+    rabbitHoleArtworkEnabled: true,
+    rabbitHoleBaseUrl: "http://rabbit.local/",
+    albumArtProvider: {
+      cachePublicUrl: async (sourceUrl, imageKey) => {
+        cached.push({ sourceUrl, imageKey });
+        return "https://art.example.com/art/runaway.jpg";
+      }
+    },
+    fetchImpl: async (url, options = {}) => {
+      requested.push({ url, options });
+      return {
+        ok: true,
+        json: async () => ({
+          zones: [
+            {
+              display_name: "HQPlayer",
+              now_playing: {
+                metadata_enrichment: {
+                  status: "found",
+                  inputArtist: "Eugene Becker",
+                  inputTitle: "Runaway (Original Mix)",
+                  title: "Runaway",
+                  artist: "Eugene Becker",
+                  album: "The Best of Intricate 2020 Collection, Pt. 1",
+                  imageUrl: "https://art.darthspader.com/art/cover.jpg",
+                  tidalUrl: "https://tidal.com/browse/track/163879883",
+                  durationMs: 326000,
+                  confidence: 95,
+                  source: "tidal"
+                }
+              }
+            }
+          ]
+        })
+      };
+    },
+    fetchJson: async () => {
+      throw new Error("external lookup should not run");
+    }
+  });
+
+  const result = await resolver.lookup(
+    { artist: "Eugene Becker", title: "Runaway (Original Mix)" },
+    "eugene becker|runaway original mix"
+  );
+
+  assert.equal(result.source, "tidal");
+  assert.equal(result.album, "The Best of Intricate 2020 Collection, Pt. 1");
+  assert.equal(result.albumArtUrl, "https://art.example.com/art/runaway.jpg");
+  assert.equal(result.tidalUrl, "https://tidal.com/browse/track/163879883");
+  assert.equal(result.durationMs, 326000);
+  assert.equal(requested[0].url, "http://rabbit.local/api/status");
+  assert.deepEqual(cached, [
+    {
+      sourceUrl: "https://art.darthspader.com/art/cover.jpg",
+      imageKey: "radio:eugene becker|runaway original mix"
+    }
+  ]);
+});
+
+test("resolver prefers Rabbit Hole source artwork over stale bridge artwork URLs", async () => {
+  const cached = [];
+  const resolver = new RadioMetadataResolver({
+    tidalArtworkEnabled: false,
+    discogsEnabled: false,
+    rabbitHoleArtworkEnabled: true,
+    rabbitHoleBaseUrl: "http://rabbit.local/",
+    albumArtProvider: {
+      cachePublicUrl: async (sourceUrl, imageKey) => {
+        cached.push({ sourceUrl, imageKey });
+        return "https://art.example.com/art/jigsaw.jpg";
+      }
+    },
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        zones: [
+          {
+            display_name: "HQPlayer",
+            now_playing: {
+              metadata_enrichment: {
+                status: "found",
+                inputArtist: "F-Act, Allan McLoud",
+                inputTitle: "Jigsaw (Levitone Remix)",
+                title: "Jigsaw (Levitone Remix)",
+                artist: "F-Act, Allan McLoud",
+                album: "Jigsaw (Levitone Remix)",
+                sourceImageUrl: "https://resources.tidal.com/images/1772a043/265e/432f/a76c/0ce454a80911/1280x1280.jpg",
+                imageUrl: "https://art.darthspader.com/art/stale.jpg",
+                tidalUrl: "https://tidal.com/browse/track/231309333",
+                confidence: 99,
+                source: "tidal"
+              }
+            }
+          }
+        ]
+      })
+    }),
+    fetchJson: async () => {
+      throw new Error("external lookup should not run");
+    }
+  });
+
+  const result = await resolver.lookup(
+    { artist: "F-Act, Allan McLoud", title: "Jigsaw (Levitone Remix)" },
+    "f act allan mcloud|jigsaw levitone remix"
+  );
+
+  assert.equal(result.albumArtUrl, "https://art.example.com/art/jigsaw.jpg");
+  assert.deepEqual(cached, [
+    {
+      sourceUrl: "https://resources.tidal.com/images/1772a043/265e/432f/a76c/0ce454a80911/1280x1280.jpg",
+      imageKey: "radio:f act allan mcloud|jigsaw levitone remix"
+    }
+  ]);
+});
+
+test("resolver ignores Rabbit Hole artwork that was echoed from RoonPresence", async () => {
+  const cached = [];
+  const resolver = new RadioMetadataResolver({
+    tidalArtworkEnabled: false,
+    discogsEnabled: false,
+    rabbitHoleArtworkEnabled: true,
+    rabbitHoleBaseUrl: "http://rabbit.local/",
+    albumArtProvider: {
+      cachePublicUrl: async (sourceUrl, imageKey) => {
+        cached.push({ sourceUrl, imageKey });
+        return "https://art.example.com/art/nurali.jpg";
+      }
+    },
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        zones: [
+          {
+            display_name: "System Output",
+            now_playing: {
+              radio_lookup: {
+                artist: "Wally Lopez, Kaik",
+                title: "Nurali (Sonia Scott remix)"
+              },
+              radio_enrichment: {
+                key: "wally lopez kaik|nurali sonia scott remix",
+                title: "Nurali (Sonia Scott remix)",
+                artist: "Wally Lopez, Kaik",
+                album: "Progressive -DI.FM",
+                imageUrl: "https://art.darthspader.com/art/stale-moku.jpg",
+                source: "radio-roonpresence"
+              },
+              metadata_enrichment: {
+                status: "found",
+                inputArtist: "Wally Lopez, Kaik",
+                inputTitle: "Nurali (Sonia Scott remix)",
+                title: "Nurali (Sonia Scott Remix)",
+                artist: "Wally Lopez, KAIK",
+                album: "Nurali",
+                sourceImageUrl: "https://resources.tidal.com/images/e8ef15c8/30f8/4964/a57d/95b27765b29c/1280x1280.jpg",
+                imageUrl: "https://art.darthspader.com/art/correct-nurali.jpg",
+                tidalUrl: "https://tidal.com/browse/track/510705758",
+                confidence: 99,
+                source: "tidal"
+              }
+            }
+          }
+        ]
+      })
+    }),
+    fetchJson: async () => {
+      throw new Error("external lookup should not run");
+    }
+  });
+
+  const result = await resolver.lookup(
+    { artist: "Wally Lopez, Kaik", title: "Nurali (Sonia Scott remix)" },
+    "wally lopez kaik|nurali sonia scott remix"
+  );
+
+  assert.equal(result.source, "tidal");
+  assert.equal(result.album, "Nurali");
+  assert.equal(result.albumArtUrl, "https://art.example.com/art/nurali.jpg");
+  assert.equal(result.tidalUrl, "https://tidal.com/browse/track/510705758");
+  assert.deepEqual(cached, [
+    {
+      sourceUrl: "https://resources.tidal.com/images/e8ef15c8/30f8/4964/a57d/95b27765b29c/1280x1280.jpg",
+      imageKey: "radio:wally lopez kaik|nurali sonia scott remix"
+    }
+  ]);
+});
+
+test("resolver does not accept only self-reported Rabbit Hole radio artwork", () => {
+  const result = chooseRabbitHoleArtwork(
+    {
+      zones: [
+        {
+          now_playing: {
+            radio_enrichment: {
+              title: "Nurali (Sonia Scott remix)",
+              artist: "Wally Lopez, Kaik",
+              imageUrl: "https://art.darthspader.com/art/stale-moku.jpg",
+              source: "radio-roonpresence"
+            }
+          }
+        }
+      ]
+    },
+    { artist: "Wally Lopez, Kaik", title: "Nurali (Sonia Scott remix)" }
+  );
+
+  assert.equal(result, null);
+});
+
+test("resolver retries Rabbit Hole artwork when enrichment arrives just after the track change", async () => {
+  const cached = [];
+  const requested = [];
+  const resolver = new RadioMetadataResolver({
+    tidalArtworkEnabled: false,
+    discogsEnabled: false,
+    rabbitHoleArtworkEnabled: true,
+    rabbitHoleBaseUrl: "http://rabbit.local/",
+    rabbitHoleRetryDelayMs: 1,
+    albumArtProvider: {
+      cachePublicUrl: async (sourceUrl, imageKey) => {
+        cached.push({ sourceUrl, imageKey });
+        return "https://art.example.com/art/cloudy-day.jpg";
+      }
+    },
+    fetchImpl: async (url) => {
+      requested.push(url);
+      const enrichment = requested.length >= 2
+        ? {
+            status: "found",
+            inputArtist: "Sunburnt Octopus",
+            inputTitle: "Cloudy Day",
+            title: "Cloudy Day",
+            artist: "Sunburnt Octopus",
+            album: "A Break In The Clouds",
+            imageUrl: "https://art.darthspader.com/art/cloudy-day.jpg",
+            tidalUrl: "https://tidal.com/browse/track/516067399",
+            confidence: 99,
+            source: "tidal"
+          }
+        : null;
+      return {
+        ok: true,
+        json: async () => ({
+          zones: [
+            {
+              display_name: "HQPlayer",
+              now_playing: {
+                radio_lookup: {
+                  artist: "Sunburnt Octopus",
+                  title: "Cloudy Day"
+                },
+                metadata_enrichment: enrichment
+              }
+            }
+          ]
+        })
+      };
+    },
+    fetchJson: async () => {
+      throw new Error("external lookup should not run");
+    }
+  });
+
+  const result = await resolver.lookup(
+    { artist: "Sunburnt Octopus", title: "Cloudy Day" },
+    "sunburnt octopus|cloudy day"
+  );
+
+  assert.equal(result.source, "tidal");
+  assert.equal(result.album, "A Break In The Clouds");
+  assert.equal(result.albumArtUrl, "https://art.example.com/art/cloudy-day.jpg");
+  assert.equal(result.tidalUrl, "https://tidal.com/browse/track/516067399");
+  assert.deepEqual(requested, [
+    "http://rabbit.local/api/status",
+    "http://rabbit.local/api/status"
+  ]);
+  assert.deepEqual(cached, [
+    {
+      sourceUrl: "https://art.darthspader.com/art/cloudy-day.jpg",
+      imageKey: "radio:sunburnt octopus|cloudy day"
+    }
+  ]);
+});
+
+test("resolver keeps polling Rabbit Hole after an initial artwork miss", async () => {
+  const cached = [];
+  const rabbitRequests = [];
+  const externalRequests = [];
+  const resolver = new RadioMetadataResolver({
+    tidalArtworkEnabled: false,
+    discogsEnabled: false,
+    rabbitHoleArtworkEnabled: true,
+    rabbitHoleBaseUrl: "http://rabbit.local/",
+    rabbitHoleRetryDelayMs: 0,
+    rabbitHolePollIntervalMs: 1,
+    rabbitHoleMaxWaitMs: 100,
+    albumArtProvider: {
+      cachePublicUrl: async (sourceUrl, imageKey) => {
+        cached.push({ sourceUrl, imageKey });
+        return "https://art.example.com/art/dripping.jpg";
+      }
+    },
+    fetchImpl: async (url) => {
+      rabbitRequests.push(url);
+      const enrichment = rabbitRequests.length >= 4
+        ? {
+            status: "found",
+            inputArtist: "Pablo Gargano",
+            inputTitle: "Dripping (Original Mix)",
+            title: "Dripping",
+            artist: "Pablo Gargano",
+            album: "Dripping / Dejavu",
+            imageUrl: "https://art.darthspader.com/art/dripping.jpg",
+            tidalUrl: "https://tidal.com/browse/track/281129308",
+            confidence: 95,
+            source: "tidal"
+          }
+        : null;
+      return {
+        ok: true,
+        json: async () => ({
+          zones: [
+            {
+              display_name: "HQPlayer",
+              now_playing: {
+                radio_lookup: {
+                  artist: "Pablo Gargano",
+                  title: "Dripping (Original Mix)"
+                },
+                metadata_enrichment: enrichment
+              }
+            }
+          ]
+        })
+      };
+    },
+    fetchJson: async (url) => {
+      externalRequests.push(url);
+      return { recordings: [] };
+    }
+  });
+  const track = { artist: "Pablo Gargano", title: "Dripping (Original Mix)" };
+  const key = "pablo gargano|dripping original mix";
+  const resolved = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timed out waiting for deferred artwork")), 250);
+    resolver.once("metadataResolved", (value) => {
+      clearTimeout(timer);
+      resolve(value);
+    });
+  });
+
+  resolver.pending.add(key);
+  resolver.queue.push({ key, track });
+  await resolver.processNext();
+
+  assert.equal(resolver.cache.get(key)?.status, "deferred");
+  const result = await resolved;
+
+  assert.equal(result.source, "tidal");
+  assert.equal(result.album, "Dripping / Dejavu");
+  assert.equal(result.albumArtUrl, "https://art.example.com/art/dripping.jpg");
+  assert.equal(result.tidalUrl, "https://tidal.com/browse/track/281129308");
+  assert.equal(resolver.cache.get(key)?.status, "found");
+  assert.equal(externalRequests.length, 1);
+  assert.deepEqual(cached, [
+    {
+      sourceUrl: "https://art.darthspader.com/art/dripping.jpg",
+      imageKey: "radio:pablo gargano|dripping original mix"
+    }
+  ]);
+  resolver.stop();
+});
+
 test("resolver prefers TIDAL artwork before Discogs", async () => {
   const requested = [];
   const resolver = new RadioMetadataResolver({
@@ -365,6 +747,167 @@ test("resolver parses TIDAL open API search relationships", async () => {
   assert.equal(result.album, "Indian Spirit");
   assert.equal(result.durationMs, 300_000);
   assert.equal(result.albumArtUrl, "https://resources.tidal.com/images/12345678/abcd/4321/9000/123456789abc/640x640.jpg");
+});
+
+test("resolver retries TIDAL search with simpler includes after rich include is rejected", async () => {
+  const requestedIncludes = [];
+  const resolver = new RadioMetadataResolver({
+    tidalAccessToken: "token",
+    logger: { debug: () => {}, info: () => {}, warn: () => {} },
+    fetchJson: async (url) => {
+      const include = new URL(url).searchParams.get("include") || "";
+      requestedIncludes.push(include);
+      if (include === "tracks,albums,artists,albums.coverArt") {
+        const error = new Error("HTTP 400");
+        error.status = 400;
+        throw error;
+      }
+      return {
+        items: [
+          {
+            title: "One Hundred Hunters",
+            artists: [{ name: "Nigel Stanford" }],
+            album: {
+              title: "Solar Echoes",
+              cover: "12345678-abcd-4321-9000-123456789abc"
+            }
+          }
+        ]
+      };
+    }
+  });
+
+  const result = await resolver.lookup(
+    { artist: "Nigel Stanford", title: "One Hundred Hunters" },
+    "nigel stanford|one hundred hunters"
+  );
+
+  assert.equal(result.source, "tidal");
+  assert.equal(result.album, "Solar Echoes");
+  assert.equal(result.albumArtUrl, "https://resources.tidal.com/images/12345678/abcd/4321/9000/123456789abc/640x640.jpg");
+  assert.deepEqual(requestedIncludes, [
+    "tracks,albums,artists,albums.coverArt",
+    "tracks,albums,artists"
+  ]);
+});
+
+test("resolver falls back to TIDAL v1 when TIDAL v2 rejects all include shapes", async () => {
+  const requested = [];
+  const cached = [];
+  const resolver = new RadioMetadataResolver({
+    tidalAccessToken: "token",
+    logger: { debug: () => {}, info: () => {}, warn: () => {} },
+    albumArtProvider: {
+      cachePublicUrl: async (sourceUrl, imageKey) => {
+        cached.push({ sourceUrl, imageKey });
+        return "https://art.example.com/art/celestial.jpg";
+      }
+    },
+    fetchJson: async (url, options = {}) => {
+      requested.push(url);
+      if (url.startsWith("https://openapi.tidal.com/")) {
+        const error = new Error("HTTP 400");
+        error.status = 400;
+        throw error;
+      }
+      if (url.startsWith("https://api.tidal.com/v1/search/tracks")) {
+        assert.equal(options.headers.authorization, "Bearer token");
+        return {
+          items: [
+            {
+              id: 12345,
+              title: "Celestial (Extended Mix)",
+              duration: 468,
+              url: "https://tidal.com/browse/track/12345",
+              artists: [{ name: "Florian Gasperini" }],
+              album: {
+                title: "Celestial",
+                cover: "12345678-abcd-4321-9000-123456789abc"
+              }
+            }
+          ]
+        };
+      }
+      throw new Error("Unexpected request: " + url);
+    }
+  });
+
+  const result = await resolver.lookup(
+    { artist: "Florian Gasperini", title: "Celestial (Extended Mix)" },
+    "florian gasperini|celestial extended mix"
+  );
+
+  assert.equal(result.source, "tidal-v1");
+  assert.equal(result.album, "Celestial");
+  assert.equal(result.albumArtUrl, "https://art.example.com/art/celestial.jpg");
+  assert.equal(result.tidalUrl, "https://tidal.com/browse/track/12345");
+  assert.equal(requested.some((url) => url.startsWith("https://openapi.tidal.com/")), true);
+  assert.equal(requested.some((url) => url.startsWith("https://api.tidal.com/v1/search/tracks")), true);
+  assert.deepEqual(cached, [
+    {
+      sourceUrl: "https://resources.tidal.com/images/12345678/abcd/4321/9000/123456789abc/640x640.jpg",
+      imageKey: "radio:florian gasperini|celestial extended mix"
+    }
+  ]);
+});
+
+test("resolver parses TIDAL album coverArt artwork relationships", async () => {
+  const resolver = new RadioMetadataResolver({
+    tidalAccessToken: "token",
+    fetchJson: async (url, options = {}) => {
+      const parsed = new URL(url);
+      assert.equal(parsed.searchParams.get("include"), "tracks,albums,artists,albums.coverArt");
+      assert.equal(options.headers.authorization, "Bearer token");
+      return {
+        data: [{ id: "439049502", type: "tracks" }],
+        included: [
+          {
+            id: "439049502",
+            type: "tracks",
+            attributes: {
+              title: "Shimmer",
+              duration: 317,
+              externalLinks: [{ href: "https://tidal.com/browse/track/439049502", meta: { type: "TIDAL_SHARING" } }]
+            },
+            relationships: {
+              artists: { data: [{ id: "artist-1", type: "artists" }] },
+              albums: { data: [{ id: "439049501", type: "albums" }] }
+            }
+          },
+          { id: "artist-1", type: "artists", attributes: { name: "Ambyion" } },
+          {
+            id: "439049501",
+            type: "albums",
+            attributes: { title: "Shimmer" },
+            relationships: {
+              coverArt: { data: [{ id: "artwork-1", type: "artworks" }] }
+            }
+          },
+          {
+            id: "artwork-1",
+            type: "artworks",
+            attributes: {
+              files: [
+                { href: "https://resources.tidal.com/images/small.jpg", meta: { width: 160, height: 160 } },
+                { href: "https://resources.tidal.com/images/large.jpg", meta: { width: 1280, height: 1280 } }
+              ]
+            }
+          }
+        ]
+      };
+    }
+  });
+
+  const result = await resolver.lookup(
+    { artist: "Ambyion", title: "Shimmer" },
+    "ambyion|shimmer"
+  );
+
+  assert.equal(result.source, "tidal");
+  assert.equal(result.album, "Shimmer");
+  assert.equal(result.durationMs, 317_000);
+  assert.equal(result.albumArtUrl, "https://resources.tidal.com/images/large.jpg");
+  assert.equal(result.tidalUrl, "https://tidal.com/browse/track/439049502");
 });
 test("resolver fetches and caches a TIDAL token from client credentials", async () => {
   const requested = [];
@@ -585,18 +1128,22 @@ test("extracts TIDAL artwork from web page text", () => {
   );
 });
 
-test("resolver skips TIDAL web artwork when radio lookup has an artist", async () => {
-  let fetched = false;
+test("resolver uses guarded TIDAL web artwork for artist-qualified radio lookups", async () => {
+  const fetched = [];
+  const cached = [];
   const resolver = new RadioMetadataResolver({
     tidalSearchBaseUrl: "https://tidal.com/search?q=",
     albumArtProvider: {
-      cachePublicUrl: async () => "https://art.example.com/art/wrong.jpg"
+      cachePublicUrl: async (sourceUrl, imageKey) => {
+        cached.push({ sourceUrl, imageKey });
+        return "https://art.example.com/art/tidal-web-exact.jpg";
+      }
     },
-    fetchImpl: async () => {
-      fetched = true;
+    fetchImpl: async (url) => {
+      fetched.push(url);
       return {
         ok: true,
-        text: async () => "https://resources.tidal.com/images/12345678/abcd/4321/9000/123456789abc/640x640.jpg"
+        text: async () => '<html><a href="/browse/track/12345">Abity - Lonely (Original Mix)</a><img src="https://resources.tidal.com/images/12345678/abcd/4321/9000/123456789abc/640x640.jpg"></html>'
       };
     }
   });
@@ -606,8 +1153,41 @@ test("resolver skips TIDAL web artwork when radio lookup has an artist", async (
     "abity|lonely"
   );
 
+  assert.equal(result.source, "tidal-web");
+  assert.equal(result.albumArtUrl, "https://art.example.com/art/tidal-web-exact.jpg");
+  assert.equal(result.tidalUrl, "https://tidal.com/browse/track/12345");
+  assert.equal(fetched[0], "https://tidal.com/search?q=Abity%20Lonely%20(Original%20Mix)");
+  assert.deepEqual(cached, [
+    {
+      sourceUrl: "https://resources.tidal.com/images/12345678/abcd/4321/9000/123456789abc/640x640.jpg",
+      imageKey: "radio:abity|lonely"
+    }
+  ]);
+});
+
+test("resolver rejects TIDAL web artwork when page text does not match the requested artist", async () => {
+  const cached = [];
+  const resolver = new RadioMetadataResolver({
+    tidalSearchBaseUrl: "https://tidal.com/search?q=",
+    albumArtProvider: {
+      cachePublicUrl: async (sourceUrl, imageKey) => {
+        cached.push({ sourceUrl, imageKey });
+        return "https://art.example.com/art/wrong.jpg";
+      }
+    },
+    fetchImpl: async () => ({
+      ok: true,
+      text: async () => '<html><a href="/browse/track/12345">Akon - Lonely</a><img src="https://resources.tidal.com/images/wrong.jpg"></html>'
+    })
+  });
+
+  const result = await resolver.searchTidalWeb(
+    { artist: "Abity", title: "Lonely (Original Mix)" },
+    "abity|lonely"
+  );
+
   assert.equal(result, null);
-  assert.equal(fetched, false);
+  assert.deepEqual(cached, []);
 });
 
 test("resolver can still use TIDAL web artwork for title-only radio lookups", async () => {
@@ -625,7 +1205,7 @@ test("resolver can still use TIDAL web artwork for title-only radio lookups", as
       fetched.push(url);
       return {
         ok: true,
-        text: async () => '<html><a href="/browse/track/12345">play</a><img src="https://resources.tidal.com/images/12345678/abcd/4321/9000/123456789abc/640x640.jpg"></html>'
+        text: async () => '<html><a href="/browse/track/12345">In A Dream (Club Mix)</a><img src="https://resources.tidal.com/images/12345678/abcd/4321/9000/123456789abc/640x640.jpg"></html>'
       };
     },
     fetchJson: async () => {
@@ -812,6 +1392,50 @@ test("resolver caches TIDAL artwork through album art proxy", async () => {
 
   assert.equal(result.source, "tidal");
   assert.equal(result.albumArtUrl, "https://art.example.com/art/cached.jpg");
+  assert.deepEqual(cached, [
+    {
+      sourceUrl: "https://resources.tidal.com/images/12345678/abcd/4321/9000/123456789abc/640x640.jpg",
+      imageKey: "radio:e-clip|indian spirit"
+    }
+  ]);
+});
+
+test("resolver keeps a deferred bridge URL when TIDAL artwork prefetch fails", async () => {
+  const warnings = [];
+  const cached = [];
+  const resolver = new RadioMetadataResolver({
+    tidalAccessToken: "token",
+    albumArtProvider: {
+      cachePublicUrl: async (sourceUrl, imageKey) => {
+        cached.push({ sourceUrl, imageKey });
+        throw new Error("dns failed");
+      },
+      getPublicUrl: () => "https://art.example.com/art/deferred.jpg"
+    },
+    logger: { warn: (message, data) => warnings.push({ message, data }), debug: () => {} },
+    fetchJson: async () => ({
+      items: [
+        {
+          title: "Indian Spirit",
+          artists: [{ name: "E-Clip" }],
+          album: {
+            title: "Indian Spirit",
+            cover: "12345678-abcd-4321-9000-123456789abc"
+          }
+        }
+      ]
+    })
+  });
+
+  const result = await resolver.lookup(
+    { artist: "E-Clip", title: "Indian Spirit" },
+    "e-clip|indian spirit"
+  );
+
+  assert.equal(result.source, "tidal");
+  assert.equal(result.albumArtUrl, "https://art.example.com/art/deferred.jpg");
+  assert.equal(warnings[0].message, "Album art proxy cache failed");
+  assert.equal(warnings[0].data.error, "dns failed");
   assert.deepEqual(cached, [
     {
       sourceUrl: "https://resources.tidal.com/images/12345678/abcd/4321/9000/123456789abc/640x640.jpg",

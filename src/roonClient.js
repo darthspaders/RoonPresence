@@ -43,18 +43,31 @@ function isPrivateImageUrl(url) {
   return /^https?:\/\/(?:127\.|10\.|192\.168\.|localhost|172\.(?:1[6-9]|2\d|3[0-1])\.)/i.test(String(url || ""));
 }
 
+function isPlayingZone(zone) {
+  return zone?.state === "playing" && Boolean(zone?.now_playing);
+}
+
+function getRoonImageEndpoint(core) {
+  const host = core?.moo?.transport?.host || "127.0.0.1";
+  const port = core?.moo?.transport?.port || core?.registration?.http_port || null;
+  if (!port) return null;
+  return { host, port };
+}
+
 class RoonClient extends EventEmitter {
-  constructor({ roonConfig, hqplayerZoneMatch, logger, clock = () => Date.now() }) {
+  constructor({ roonConfig, hqplayerZoneMatch, fallbackZoneMatch = "System Output", logger, clock = () => Date.now() }) {
     super();
     this.roonConfig = roonConfig;
     this.logger = logger;
     this.clock = clock;
     this.isHqPlayerZone = makeZoneMatcher(hqplayerZoneMatch);
+    this.isFallbackZone = makeZoneMatcher(fallbackZoneMatch);
     this.roon = null;
     this.core = null;
     this.transport = null;
     this.zones = new Map();
     this.activeZoneId = null;
+    this.activeZoneSelectionMode = "";
     this.lastEmittedSignature = "";
     this.lastEmittedSeek = null;
     this.lastEmittedAt = 0;
@@ -97,6 +110,7 @@ class RoonClient extends EventEmitter {
     this.transport = null;
     this.zones.clear();
     this.activeZoneId = null;
+    this.activeZoneSelectionMode = "";
     this.clearZoneEvaluationTimer();
     this.resetEmissionState();
     this.emit("inactive");
@@ -160,22 +174,65 @@ class RoonClient extends EventEmitter {
     this.pendingCommand = "";
   }
 
+  selectActiveZone() {
+    const zones = [...this.zones.values()];
+    const hqplayerCandidates = zones.filter((zone) => this.isHqPlayerZone(zone));
+    const fallbackCandidates = zones.filter((zone) => this.isFallbackZone(zone));
+    const activeZone = this.activeZoneId ? this.zones.get(this.activeZoneId) : null;
+
+    if (activeZone && this.isHqPlayerZone(activeZone) && isPlayingZone(activeZone)) {
+      return { zone: activeZone, mode: "hqplayer" };
+    }
+
+    const playingHqplayer = hqplayerCandidates.find(isPlayingZone);
+    if (playingHqplayer) return { zone: playingHqplayer, mode: "hqplayer" };
+
+    if (activeZone && this.isFallbackZone(activeZone) && isPlayingZone(activeZone)) {
+      return { zone: activeZone, mode: "fallback" };
+    }
+
+    const playingFallback = fallbackCandidates.find(isPlayingZone);
+    if (playingFallback) return { zone: playingFallback, mode: "fallback" };
+
+    if (activeZone && isPlayingZone(activeZone)) {
+      return { zone: activeZone, mode: "playing" };
+    }
+
+    const playingAny = zones.find(isPlayingZone);
+    if (playingAny) return { zone: playingAny, mode: "playing" };
+
+    const idleHqplayer = hqplayerCandidates[0];
+    if (idleHqplayer) return { zone: idleHqplayer, mode: "hqplayer-idle" };
+
+    const idleFallback = fallbackCandidates[0];
+    if (idleFallback) return { zone: idleFallback, mode: "fallback-idle" };
+
+    return { zone: null, mode: "" };
+  }
+
   evaluateActiveZone(command) {
-    const candidates = [...this.zones.values()].filter((zone) => this.isHqPlayerZone(zone));
-    const playing = candidates.find((zone) => zone.state === "playing");
-    const selected = playing || candidates[0];
+    const { zone: selected, mode } = this.selectActiveZone();
 
     if (!selected) {
-      if (this.activeZoneId) this.logger.warn("No HQPlayer zone found");
+      if (this.activeZoneId) this.logger.warn("No matching or playing Roon zone found");
       this.activeZoneId = null;
+      this.activeZoneSelectionMode = "";
       this.resetEmissionState();
       this.emit("inactive");
       return;
     }
 
-    if (selected.zone_id !== this.activeZoneId) {
+    if (selected.zone_id !== this.activeZoneId || mode !== this.activeZoneSelectionMode) {
       this.activeZoneId = selected.zone_id;
-      this.logger.info(`Using HQPlayer zone: ${selected.display_name || selected.zone_id}`);
+      this.activeZoneSelectionMode = mode;
+      const modeLabel = {
+        hqplayer: "HQPlayer zone",
+        fallback: "fallback Roon zone",
+        playing: "active playing Roon zone",
+        "hqplayer-idle": "idle HQPlayer zone",
+        "fallback-idle": "idle fallback Roon zone"
+      }[mode] || "Roon zone";
+      this.logger.info(`Using ${modeLabel}: ${selected.display_name || selected.zone_id}`);
     }
 
     if (selected.state === "playing") {
@@ -190,6 +247,7 @@ class RoonClient extends EventEmitter {
 
     this.logger.debug("Processed Roon zone update", {
       command,
+      selectionMode: mode,
       zone: selected.display_name,
       state: selected.state
     });
@@ -232,13 +290,12 @@ class RoonClient extends EventEmitter {
 
   applyAlbumArtUrl(zone) {
     const imageKey = zone?.now_playing?.image_key;
-    if (!imageKey || !this.core?.moo?.transport?.host || !this.core?.moo?.transport?.port) return;
+    const endpoint = getRoonImageEndpoint(this.core);
+    if (!imageKey || !endpoint) return;
 
-    const host = this.core.moo.transport.host;
-    const port = this.core.moo.transport.port;
     const encodedKey = encodeURIComponent(imageKey);
     zone.now_playing.album_art_url =
-      `http://${host}:${port}/api/image/${encodedKey}?scale=fill&width=512&height=512&format=image/jpeg`;
+      `http://${endpoint.host}:${endpoint.port}/api/image/${encodedKey}?width=512&height=512`;
 
     this.logger.debug("Resolved Roon album art URL", {
       imageKey,
@@ -250,4 +307,4 @@ class RoonClient extends EventEmitter {
   }
 }
 
-module.exports = { RoonClient, zoneContentSignature, isPrivateImageUrl };
+module.exports = { RoonClient, zoneContentSignature, getRoonImageEndpoint, isPrivateImageUrl, isPlayingZone };

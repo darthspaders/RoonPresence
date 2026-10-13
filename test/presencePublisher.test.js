@@ -378,6 +378,26 @@ test("publisher asks album art proxy to prefetch local Roon artwork", () => {
   ]);
 });
 
+test("publisher refreshes Discord when cached artwork has a versioned URL", async () => {
+  const harness = createHarness();
+  const updateNowPlayingCalls = [];
+  harness.publisher.albumArtProvider = {
+    getPublicUrl: () => "https://roon-art.example.com/art/abc123.jpg",
+    prefetchPublicUrl: () => Promise.resolve("https://roon-art.example.com/art/abc123.jpg?v=2000000"),
+    updateNowPlaying: (presence, activity) => {
+      updateNowPlayingCalls.push({ presence, activity });
+    }
+  };
+
+  assert.equal(harness.publisher.publishZone(localZoneWithAlbumArt()), true);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(harness.published.length, 2);
+  assert.equal(harness.published[0].largeImageKey, "https://roon-art.example.com/art/abc123.jpg");
+  assert.equal(harness.published[1].largeImageKey, "https://roon-art.example.com/art/abc123.jpg?v=2000000");
+  assert.equal(updateNowPlayingCalls.at(-1).activity.largeImageKey, "https://roon-art.example.com/art/abc123.jpg?v=2000000");
+});
+
 test("radio album art shows station name as asset text", () => {
   const harness = createHarness();
   harness.publisher.albumArtProvider = {
@@ -442,6 +462,36 @@ test("already proxied radio artwork is sent without wrapping again", () => {
   assert.equal(calls, 1);
 });
 
+test("resolved public radio artwork can render before proxy cache finishes", () => {
+  const harness = createHarness();
+  harness.publisher.albumArtProvider = {
+    getPublicUrl: () => ""
+  };
+
+  const sourceUrl = "https://resources.tidal.com/images/986320c5/2aef/4f33/bd68/0e1e38563b3f/1280x1280.jpg";
+  const activity = harness.publisher.toDiscordRpcActivity({
+    timestampMode: "RADIO",
+    activity: {
+      details: "ELEON - Shadow Worlds",
+      state: "poly-sinc-gauss-long, PCM, 192kHz",
+      instance: false,
+      timestamps: { start: 2_000_000 }
+    },
+    metadata: {
+      title: "Shadow Worlds",
+      artist: "ELEON",
+      albumArtUrl: sourceUrl,
+      albumArtKey: "radio:eleon|shadow worlds",
+      radioTrackKey: "eleon|shadow worlds",
+      radioArtworkResolved: true,
+      radioStationName: "Chillout - DI.FM"
+    }
+  });
+
+  assert.equal(activity.largeImageKey, sourceUrl);
+  assert.equal(activity.largeImageText, "Chillout - DI.FM");
+});
+
 test("stale resolved radio artwork falls back to Discord app artwork", () => {
   const harness = createHarness();
   harness.publisher.defaultImageKey = "roonpresence";
@@ -504,6 +554,39 @@ test("unresolved radio station artwork falls back to Discord app artwork", () =>
   assert.equal(activity.largeImageText, "Insomniac Radio");
 });
 
+test("unresolved private Roon radio artwork is not proxied before catalog artwork resolves", () => {
+  const harness = createHarness();
+  harness.publisher.defaultImageKey = "roonpresence";
+  harness.publisher.albumArtProvider = {
+    getPublicUrl: () => {
+      throw new Error("Private Roon radio artwork should not be proxied before catalog resolution");
+    }
+  };
+
+  const activity = harness.publisher.toDiscordRpcActivity({
+    timestampMode: "RADIO",
+    activity: {
+      details: "Moku - My World (Paul Honey Remix)",
+      state: "poly-sinc-gauss-long, SDM, DSD512",
+      instance: false,
+      timestamps: { start: 2_000_000 }
+    },
+    metadata: {
+      title: "My World (Paul Honey Remix)",
+      artist: "Moku",
+      album: "Progressive -DI.FM",
+      albumArtUrl: "http://127.0.0.1:9100/api/image/978b00e880e9537e41401d569188435a?width=512&height=512",
+      albumArtKey: "978b00e880e9537e41401d569188435a",
+      radioTrackKey: "moku|my world paul honey remix",
+      radioArtworkResolved: false,
+      radioStationName: "Progressive -DI.FM"
+    }
+  });
+
+  assert.equal(activity.largeImageKey, "roonpresence");
+  assert.equal(activity.largeImageText, "Progressive -DI.FM");
+});
+
 test("republishLast refreshes Discord when only HQPlayer signal path changes", () => {
   const harness = createMutableSignalHarness("poly-sinc-gauss-hires-mp, TPDF, PCM, 192kHz");
 
@@ -564,6 +647,54 @@ test("adds TIDAL search button for local tracks", () => {
   ]);
 });
 
+test("uses public now bridge button for local tracks when no TIDAL URL is available", () => {
+  const harness = createHarness();
+  harness.publisher.albumArtProvider = {
+    getPublicNowUrl: () => "https://art.example.com/now/u/darthspader"
+  };
+  harness.publisher.updateConfig({
+    tidalButton: {
+      enabled: true,
+      label: "Play now",
+      searchBaseUrl: "https://tidal.com/search?q=",
+      openMode: "bridge"
+    }
+  });
+
+  assert.equal(harness.publisher.publishZone(localZone({ title: "Track Name", artist: "Artist Name" })), true);
+
+  assert.deepEqual(harness.published[0].buttons, [
+    {
+      label: "Play now",
+      url: "https://art.example.com/now/u/darthspader"
+    }
+  ]);
+});
+
+test("web open mode keeps TIDAL search button for local tracks", () => {
+  const harness = createHarness();
+  harness.publisher.albumArtProvider = {
+    getPublicNowUrl: () => "https://art.example.com/now/u/darthspader"
+  };
+  harness.publisher.updateConfig({
+    tidalButton: {
+      enabled: true,
+      label: "Play on TIDAL",
+      searchBaseUrl: "https://tidal.com/search?q=",
+      openMode: "web"
+    }
+  });
+
+  assert.equal(harness.publisher.publishZone(localZone({ title: "Track Name", artist: "Artist Name" })), true);
+
+  assert.deepEqual(harness.published[0].buttons, [
+    {
+      label: "Play on TIDAL",
+      url: "https://tidal.com/search?q=Artist%20Name%20Track%20Name"
+    }
+  ]);
+});
+
 test("adds TIDAL search button for parsed radio tracks", () => {
   const harness = createHarnessWithSignalPath("poly-sinc-gauss-hires-lp, SDM, DSD512");
   harness.publisher.radioMetadataResolver = new RadioMetadataResolver({
@@ -598,20 +729,19 @@ test("adds TIDAL search button for parsed radio tracks", () => {
 
 
 
-test("uses TIDAL bridge URL for radio button when proxy is available", () => {
+test("uses public now bridge URL for Discord button when proxy is available", () => {
   const harness = createHarness();
   harness.publisher.albumArtProvider = {
     getPublicUrl: (sourceUrl) => sourceUrl,
-    getTidalBridgeUrl: (url, mode, albumArtUrl) => {
-      assert.equal(mode, "bridge");
-      assert.equal(albumArtUrl, "https://art.example.com/art/cover.jpg");
-      return url === "https://tidal.com/browse/track/12345" ? "https://art.example.com/tidal/track/12345?art=cover" : "";
+    getPublicNowUrl: () => "https://art.example.com/now/u/darthspader",
+    getTidalBridgeUrl: () => {
+      throw new Error("Discord button should open the now bridge page first");
     }
   };
   harness.publisher.updateConfig({
     tidalButton: {
       enabled: true,
-      label: "Play on TIDAL",
+      label: "Play now",
       searchBaseUrl: "https://tidal.com/search?q=",
       openMode: "bridge"
     }
@@ -632,7 +762,7 @@ test("uses TIDAL bridge URL for radio button when proxy is available", () => {
   });
 
   assert.deepEqual(activity.buttons, [
-    { label: "Play on TIDAL", url: "https://art.example.com/tidal/track/12345?art=cover" }
+    { label: "Play now", url: "https://art.example.com/now/u/darthspader" }
   ]);
 });
 
@@ -677,4 +807,16 @@ test("changing TIDAL open mode republishes button URL", () => {
 
   assert.equal(harness.publisher.republishLast(), true);
   assert.equal(harness.published.at(-1).buttons[0].url, "https://art.example.com/tidal/manual/12345");
+});
+
+test("oversized Discord credits retain the track title and signal path", () => {
+  const harness=createHarnessWithSignalPath("PCM · 192 kHz");
+  const title="Progressive Nights - Danjuna B2B Paco Pauly - Organic Progressive House Mix";
+  const artist="Long artist credit, ".repeat(30);
+  harness.publisher.publishZone(localZone({title,artist}));
+  const result=harness.published.at(-1);
+  assert.ok(result.details.startsWith(title+" - "));
+  assert.ok(result.name.startsWith(title+" - "));
+  assert.ok(result.details.length<=128);
+  assert.equal(result.state,"PCM · 192 kHz");
 });
